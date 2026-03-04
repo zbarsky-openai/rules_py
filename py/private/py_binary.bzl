@@ -17,6 +17,16 @@ def _dict_to_exports(env):
         for (k, v) in env.items()
     ]
 
+def _is_workspace_import(workspace_name, import_path):
+    return import_path == workspace_name or import_path.startswith(workspace_name + "/")
+
+def _prepend_pth_import(relative_path):
+    # Third-party wheels are linked into site-packages, which otherwise wins over
+    # same-named monorepo packages referenced via .pth entries. Prepending
+    # workspace-owned import roots keeps first-party deps stable for tools like
+    # mypy when a transitive wheel vendors the same top-level package name.
+    return "import os, sys; sys.path.insert(0, os.path.normpath(os.path.join(sitedir, \"{}\")))".format(relative_path)
+
 def _py_binary_rule_impl(ctx):
     venv_toolchain = ctx.toolchains[VENV_TOOLCHAIN]
     py_toolchain = _py_semantics.resolve_toolchain(ctx)
@@ -50,7 +60,12 @@ def _py_binary_rule_impl(ctx):
     # Maybe in the future we can opt out of this?
     pth_lines.add(escape)
 
-    pth_lines.add_all(imports_depset, format_each = "{}/%s".format(escape))
+    for import_path in imports_depset.to_list():
+        relative_path = "{}/{}".format(escape, import_path)
+        if _is_workspace_import(ctx.workspace_name, import_path):
+            pth_lines.add(_prepend_pth_import(relative_path))
+        else:
+            pth_lines.add(relative_path)
 
     site_packages_pth_file = ctx.actions.declare_file("{}.venv.pth".format(ctx.attr.name))
     ctx.actions.write(
