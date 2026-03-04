@@ -55,6 +55,57 @@ def _override_tool(env, key, wrapper):
         env[key] = shlex.join(parts)
 
 
+def _is_valid_java_home(java_home):
+    if not java_home:
+        return False
+
+    for include_dir in ["include", "Headers"]:
+        if path.exists(path.join(java_home, include_dir, "jni.h")):
+            return True
+
+    return False
+
+
+def _discover_java_home(search_path):
+    seen = set()
+    candidates = []
+
+    env_home = environ.get("JAVA_HOME")
+    if env_home:
+        candidates.append(env_home)
+
+    for tool in ["javac", "java"]:
+        tool_path = shutil.which(tool, path = search_path)
+        if tool_path:
+            candidates.append(path.dirname(path.dirname(path.realpath(tool_path))))
+
+    for seed in [
+        path.abspath("."),
+        path.dirname(path.realpath(sys.executable)),
+        path.dirname(path.realpath(__file__)),
+    ]:
+        current = seed
+        while True:
+            install_dir = path.join(current, "install")
+            if path.isdir(install_dir):
+                for install_base in listdir(install_dir):
+                    candidates.append(path.join(install_dir, install_base, "embedded_tools", "jdk"))
+
+            parent = path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        if _is_valid_java_home(candidate):
+            return candidate
+
+    return None
+
+
 def _compiler_env(tmpdir):
     env = dict(environ)
     env["PATH"] = pathsep.join([
@@ -64,6 +115,11 @@ def _compiler_env(tmpdir):
     env["TMP"] = tmpdir
     env["TEMP"] = tmpdir
     env["TEMPDIR"] = tmpdir
+
+    if not env.get("JAVA_HOME"):
+        java_home = _discover_java_home(env["PATH"])
+        if java_home:
+            env["JAVA_HOME"] = java_home
 
     cc = _make_compiler_wrapper(tmpdir, "cc")
     cxx = _make_compiler_wrapper(tmpdir, "c++")
