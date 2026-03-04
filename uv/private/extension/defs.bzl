@@ -75,13 +75,13 @@ def _repo_safe(value):
         acc.append(ch if ch in _REPO_NAME_CHARS else "_")
     return "".join(acc)
 
-def _merge_build_deps(default_build_deps, annotated_build_deps):
+def _merge_unique(default_values, annotated_values):
     merged = []
     seen = {}
-    for dep in default_build_deps + annotated_build_deps:
-        if dep not in seen:
-            seen[dep] = 1
-            merged.append(dep)
+    for value in default_values + annotated_values:
+        if value not in seen:
+            seen[value] = 1
+            merged.append(value)
     return merged
 
 def _parse_hubs(module_ctx):
@@ -184,7 +184,7 @@ def _parse_projects(module_ctx, hub_specs):
                 else:
                     fail("Unable to identify id for package {} for lock {}\n{}".format(package, project.lock, pprint(default_versions)))
 
-            lock_build_dep_anns = {}
+            lock_package_anns = {}
             for ann in mod.tags.unstable_annotate_packages:
                 if ann.lock == project.lock:
                     annotations = toml.decode_file(module_ctx, ann.src)
@@ -193,7 +193,29 @@ def _parse_projects(module_ctx, hub_specs):
                         deps = []
                         for dep in package.get("build-dependencies", []):
                             deps.append(_resolve(dep))
-                        lock_build_dep_anns[k] = deps
+                        existing = lock_package_anns.get(k)
+                        additive_build_content = package.get("additive-build-content", "")
+                        data = package.get("data", [])
+                        patches = package.get("patches", [])
+                        patch_strip = package.get("patch-strip", None)
+                        if existing:
+                            if patch_strip != None and existing.patch_strip != None and patch_strip != existing.patch_strip:
+                                fail("Conflicting patch-strip values for {} in {}".format(package["name"], ann.src))
+                            lock_package_anns[k] = struct(
+                                additive_build_content = _merge_unique(existing.additive_build_content, [additive_build_content] if additive_build_content else []),
+                                build_deps = _merge_unique(existing.build_deps, deps),
+                                data = _merge_unique(existing.data, data),
+                                patches = _merge_unique(existing.patches, patches),
+                                patch_strip = patch_strip if patch_strip != None else existing.patch_strip,
+                            )
+                        else:
+                            lock_package_anns[k] = struct(
+                                additive_build_content = [additive_build_content] if additive_build_content else [],
+                                build_deps = deps,
+                                data = data,
+                                patches = patches,
+                                patch_strip = patch_strip,
+                            )
 
             overridden_packages = {}
 
@@ -298,11 +320,12 @@ def _parse_projects(module_ctx, hub_specs):
                             for it in extract_requirement_marker_pairs(project.lock, req, default_versions)
                         ]
 
-                    build_deps = lock_build_dep_anns.get(install_key)
+                    package_ann = lock_package_anns.get(install_key)
+                    build_deps = package_ann.build_deps if package_ann else None
                     if build_deps == None:
                         build_deps = lock_build_deps
                     else:
-                        build_deps = _merge_build_deps(lock_build_deps, build_deps)
+                        build_deps = _merge_unique(lock_build_deps, build_deps)
 
                     sbuild_specs[sbuild_id] = struct(
                         src = sdist,
@@ -321,10 +344,19 @@ def _parse_projects(module_ctx, hub_specs):
                     whl["url"].split("/")[-1].split("?")[0].split("#")[0]: bdist_table.get(whl["hash"])
                     for whl in package.get("wheels", [])
                 })
+                package_ann = lock_package_anns.get(install_key)
+                additive_build_content = _merge_unique(existing_install_cfg.additive_build_content if existing_install_cfg else [], package_ann.additive_build_content if package_ann else [])
+                data = _merge_unique(existing_install_cfg.data if existing_install_cfg else [], package_ann.data if package_ann else [])
+                patches = _merge_unique(existing_install_cfg.patches if existing_install_cfg else [], package_ann.patches if package_ann else [])
+                patch_strip = existing_install_cfg.patch_strip if existing_install_cfg and existing_install_cfg.patch_strip != None else package_ann.patch_strip if package_ann else None
 
                 install_cfgs[k] = struct(
+                    additive_build_content = additive_build_content,
                     whls = whls,
                     sbuild = existing_install_cfg.sbuild if existing_install_cfg and existing_install_cfg.sbuild else "@{}//:whl".format(sbuild_id) if has_sbuild else None,
+                    data = data,
+                    patches = patches,
+                    patch_strip = patch_strip,
                 )
 
             # Frustratingly we have to re-key all these structures so that they
@@ -472,7 +504,11 @@ def _uv_impl(module_ctx):
 
     for install_id, install_cfg in cfg.install_cfgs.items():
         whl_install(
+            additive_build_content = install_cfg.additive_build_content,
             name = install_id,
+            data = install_cfg.data,
+            patch_strip = install_cfg.patch_strip or 0,
+            patches = install_cfg.patches,
             sbuild = install_cfg.sbuild,
             whls = json.encode(install_cfg.whls),
         )

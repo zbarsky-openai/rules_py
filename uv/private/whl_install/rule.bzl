@@ -12,40 +12,72 @@ def _whl_install(ctx):
 
     archive = ctx.attr.src[DefaultInfo].files.to_list()[0]
 
-    arguments = ctx.actions.args()
-    arguments.add_all([
-        "--into",
-        install_dir.path,
-        "--wheel",
-        archive.path,
-        "--python-version-major",
-        py_toolchain.interpreter_version_info.major,
-        "--python-version-minor",
-        py_toolchain.interpreter_version_info.minor,
-    ])
-
     # Need to read the toolchain config from the unpack target so we can grab
     # its bin and run it. Note that we have to do this dance in order to get the
     # unpack toolchain in the "exec" rather than target config. This allows us
     # to use unpack in crossbuild scenarios.
     unpack = ctx.attr._unpack[platform_common.ToolchainInfo].bin.bin
-    ctx.actions.run(
-        executable = unpack,
-        arguments = [arguments],
-        inputs = [archive],
-        outputs = [
-            install_dir,
-        ],
-    )
+    if ctx.files.patches:
+        arguments = ctx.actions.args()
+        arguments.add_all([
+            "--into",
+            install_dir.path,
+            "--patch-strip",
+            ctx.attr.patch_strip,
+            "--python-version-major",
+            py_toolchain.interpreter_version_info.major,
+            "--python-version-minor",
+            py_toolchain.interpreter_version_info.minor,
+            "--unpack-tool",
+            unpack.path,
+            "--wheel",
+            archive.path,
+        ])
+        arguments.add_all([patch.path for patch in ctx.files.patches], before_each = "--patch")
+        ctx.actions.run(
+            executable = ctx.executable._patch_tool,
+            arguments = [arguments],
+            inputs = [archive, unpack] + ctx.files.patches,
+            outputs = [
+                install_dir,
+            ],
+        )
+    else:
+        arguments = ctx.actions.args()
+        arguments.add_all([
+            "--into",
+            install_dir.path,
+            "--wheel",
+            archive.path,
+            "--python-version-major",
+            py_toolchain.interpreter_version_info.major,
+            "--python-version-minor",
+            py_toolchain.interpreter_version_info.minor,
+        ])
+        ctx.actions.run(
+            executable = unpack,
+            arguments = [arguments],
+            inputs = [archive],
+            outputs = [
+                install_dir,
+            ],
+        )
+
+    runfiles = ctx.runfiles(files = [
+        install_dir,
+    ] + ctx.files.data)
+    runfiles = runfiles.merge_all([
+        dep[DefaultInfo].default_runfiles
+        for dep in ctx.attr.data
+        if DefaultInfo in dep
+    ])
 
     return [
         DefaultInfo(
             files = depset([
                 install_dir,
             ]),
-            runfiles = ctx.runfiles(files = [
-                install_dir,
-            ]),
+            runfiles = runfiles,
         ),
         PyInfo(
             transitive_sources = depset([
@@ -76,7 +108,19 @@ to bypass some of the platform checks that UV does to enable crossbuilds, and is
 lighter weight since the toolchain's files aren't inputs.
 """,
     attrs = {
+        "data": attr.label_list(
+            allow_files = True,
+        ),
+        "patch_strip": attr.int(default = 0),
+        "patches": attr.label_list(
+            allow_files = True,
+        ),
         "src": attr.label(doc = "The wheel to install, or a tree artifact containing exactly one wheel at its root."),
+        "_patch_tool": attr.label(
+            default = "//uv/private/whl_install:apply_patches",
+            executable = True,
+            cfg = "exec",
+        ),
         "_unpack": attr.label(
             default = "//py/private/toolchain:resolved_unpack_toolchain",
             cfg = "exec",

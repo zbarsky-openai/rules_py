@@ -28,6 +28,12 @@ bzl_library(
 )
 
 py_binary(
+    name = "apply_patches",
+    srcs = ["apply_patches.py"],
+    main = "apply_patches.py",
+)
+
+py_binary(
     name = "extract_dist_info",
     srcs = ["extract_dist_info.py"],
     main = "extract_dist_info.py",

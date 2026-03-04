@@ -622,13 +622,13 @@ def _resolve(package, lock_id, default_versions):
     else:
         fail("Unable to identify id for package {} for lock {}".format(package, lock_id, pprint(default_versions)))
 
-def _merge_build_deps(default_build_deps, annotated_build_deps):
+def _merge_unique(default_values, annotated_values):
     merged = []
     seen = {}
-    for dep in default_build_deps + annotated_build_deps:
-        if dep not in seen:
-            seen[dep] = 1
-            merged.append(dep)
+    for value in default_values + annotated_values:
+        if value not in seen:
+            seen[value] = 1
+            merged.append(value)
     return merged
 
 def _process_overridden_packages(mod, project, lock_id, default_versions, install_table):
@@ -642,7 +642,7 @@ def _process_overridden_packages(mod, project, lock_id, default_versions, instal
             install_table[k] = str(override.target)
 
 def _process_lock_file(module_ctx, mod, project, lock_id, lock_data, default_versions, install_table, sdist_table, sbuild_specs, install_cfgs, project_name):
-    lock_build_dep_anns = {}
+    lock_package_anns = {}
     for ann in mod.tags.unstable_annotate_packages:
         if ann.lock == project.lock:
             annotations = toml.decode_file(module_ctx, ann.src)
@@ -651,7 +651,29 @@ def _process_lock_file(module_ctx, mod, project, lock_id, lock_data, default_ver
                 deps = []
                 for dep in package.get("build-dependencies", []):
                     deps.append(_resolve(dep, lock_id, default_versions))
-                lock_build_dep_anns[k] = deps
+                existing = lock_package_anns.get(k)
+                additive_build_content = package.get("additive-build-content", "")
+                data = package.get("data", [])
+                patches = package.get("patches", [])
+                patch_strip = package.get("patch-strip", None)
+                if existing:
+                    if patch_strip != None and existing.patch_strip != None and patch_strip != existing.patch_strip:
+                        fail("Conflicting patch-strip values for {} in {}".format(package["name"], ann.src))
+                    lock_package_anns[k] = struct(
+                        additive_build_content = _merge_unique(existing.additive_build_content, [additive_build_content] if additive_build_content else []),
+                        build_deps = _merge_unique(existing.build_deps, deps),
+                        data = _merge_unique(existing.data, data),
+                        patches = _merge_unique(existing.patches, patches),
+                        patch_strip = patch_strip if patch_strip != None else existing.patch_strip,
+                    )
+                else:
+                    lock_package_anns[k] = struct(
+                        additive_build_content = [additive_build_content] if additive_build_content else [],
+                        build_deps = deps,
+                        data = data,
+                        patches = patches,
+                        patch_strip = patch_strip,
+                    )
 
     # Lazily evaluated cache
     lock_build_deps = None
@@ -698,11 +720,12 @@ def _process_lock_file(module_ctx, mod, project, lock_id, lock_data, default_ver
                     for it in _extract_requirement_marker_pairs(req, default_versions)
                 ]
 
-            build_deps = lock_build_dep_anns.get(install_key)
+            package_ann = lock_package_anns.get(install_key)
+            build_deps = package_ann.build_deps if package_ann else None
             if build_deps == None:
                 build_deps = lock_build_deps
             else:
-                build_deps = _merge_build_deps(lock_build_deps, build_deps)
+                build_deps = _merge_unique(lock_build_deps, build_deps)
 
             sbuild_specs[sbuild_id] = struct(
                 src = sdist,
@@ -717,9 +740,14 @@ def _process_lock_file(module_ctx, mod, project, lock_id, lock_data, default_ver
 
             has_sbuild = True
 
+        package_ann = lock_package_anns.get(install_key)
         install_cfgs[k] = struct(
+            additive_build_content = package_ann.additive_build_content if package_ann else [],
             whls = {whl["url"].split("/")[-1].split("?")[0].split("#")[0]: sdist_table.get(whl["hash"]) for whl in package.get("wheels", [])},
             sbuild = "@{}//:whl".format(sbuild_id) if has_sbuild else None,
+            data = package_ann.data if package_ann else [],
+            patches = package_ann.patches if package_ann else [],
+            patch_strip = package_ann.patch_strip if package_ann else None,
         )
 
 def _parse_single_project(module_ctx, mod, project, hub_specs, lock_cfgs, hub_cfgs, marker_specs, whl_configurations, sdist_specs, sdist_table, bdist_specs, bdist_table, sbuild_specs, install_cfgs, install_table, project_set):

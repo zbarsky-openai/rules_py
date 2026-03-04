@@ -216,13 +216,13 @@ py_library(
     srcs = [
         ":whl"
     ],
-    data = [
-    ],
+    data = {data},
     visibility = ["//visibility:private"],
 )
 """.format(
             arms = _format_arms(select_arms),
             default_target = repr(default_target),
+            data = indent(pprint(repository_ctx.attr.data), " " * 4).lstrip(),
             index_whl = indent(pprint([str(gazelle_index_whl)]), " " * 4).lstrip(),
         ),
     )
@@ -233,6 +233,9 @@ py_library(
 whl_install(
     name = "actual_install",
     src = ":whl",
+    data = {data},
+    patches = {patches},
+    patch_strip = {patch_strip},
     visibility = ["//visibility:private"],
 )
 whl_dist_info(
@@ -240,22 +243,34 @@ whl_dist_info(
     src = ":whl",
     visibility = ["//visibility:public"],
 )
-alias(
-    name = "install",
-    actual = select({
-        "@aspect_rules_py//uv/private/constraints:libs_are_libs": ":actual_install",
-        "@aspect_rules_py//uv/private/constraints:libs_are_whls": ":whl_lib",
-    }),
-    visibility = ["//visibility:public"],
-)
-""",
+""".format(
+            data = indent(pprint(repository_ctx.attr.data), " " * 4).lstrip(),
+            patches = indent(pprint(repository_ctx.attr.patches), " " * 4).lstrip(),
+            patch_strip = repository_ctx.attr.patch_strip,
+        ),
     )
+    content.extend([
+        "alias(",
+        "    name = \"install\",",
+        "    actual = select({",
+        "        \"@aspect_rules_py//uv/private/constraints:libs_are_libs\": \":actual_install\",",
+        "        \"@aspect_rules_py//uv/private/constraints:libs_are_whls\": \":whl_lib\",",
+        "    }),",
+        "    visibility = [\"//visibility:public\"],",
+        ")",
+    ])
+    if repository_ctx.attr.additive_build_content:
+        content.append("\n".join(repository_ctx.attr.additive_build_content))
 
     repository_ctx.file("BUILD.bazel", content = "\n".join(content))
 
 whl_install = repository_rule(
     implementation = _whl_install_impl,
     attrs = {
+        "additive_build_content": attr.string_list(),
+        "data": attr.string_list(),
+        "patch_strip": attr.int(default = 0),
+        "patches": attr.string_list(),
         "whls": attr.string(),
         "sbuild": attr.label(),
     },
