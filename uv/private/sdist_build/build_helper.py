@@ -9,7 +9,7 @@ Mostly exists to allow debugging.
 from argparse import ArgumentParser
 import shutil
 import sys
-from os import listdir, mkdir, path
+from os import defpath, environ, listdir, mkdir, path, pathsep
 from subprocess import CalledProcessError, check_call
 
 PARSER = ArgumentParser()
@@ -31,6 +31,15 @@ t = path.join(t, listdir(t)[0])
 
 # Get a path to the outdir which will be valid after we cd
 outdir = path.abspath(opts.outdir)
+build_env = {
+    "PATH": pathsep.join([
+        path.dirname(sys.executable),
+        environ.get("PATH", defpath),
+    ]),
+    "TMP": tmp_root,
+    "TEMP": tmp_root,
+    "TEMPDIR": tmp_root,
+}
 
 try:
     if path.exists(path.join(t, "pyproject.toml")):
@@ -51,15 +60,11 @@ try:
         ]
     else:
         print("Error: Unable to detect build command! Neither pyproject nor setup.py found!", file=sys.stderr)
-        exit(1)    
-    
+        exit(1)
+
     check_call(cmd,
     cwd=t,
-    env={
-        "TMP": tmp_root,
-        "TEMP": tmp_root,
-        "TEMPDIR": tmp_root,
-    })
+    env=build_env)
 except CalledProcessError:
     print("Error: Build failed!\nSee {} for the sandbox".format(t), file=sys.stderr)
     exit(1)
