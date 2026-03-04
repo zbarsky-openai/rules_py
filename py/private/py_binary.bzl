@@ -10,7 +10,10 @@ load(":transitions.bzl", "python_version_transition")
 
 def _dict_to_exports(env):
     return [
-        "export %s=\"%s\"" % (k, v)
+        "export {key}=\"$(maybe_resolve_path_like_env_value {value})\"".format(
+            key = k,
+            value = "'{}'".format(v.replace("'", "'\"'\"'")),
+        )
         for (k, v) in env.items()
     ]
 

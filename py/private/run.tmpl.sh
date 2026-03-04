@@ -23,6 +23,34 @@ function alocation {
   fi
 }
 
+function maybe_resolve_path_like_env_value {
+  local P="$1"
+  local RESOLVED
+  local ABSOLUTE
+
+  if [[ -z "${P}" || "${P:0:1}" == "/" || "${P}" == *"://"* || "${P}" == //* || "${P}" != */* ]]; then
+    echo -n "${P}"
+    return
+  fi
+
+  RESOLVED="$(rlocation "${P}" 2>/dev/null || true)"
+  if [[ -n "${RESOLVED}" ]]; then
+    ABSOLUTE="$(alocation "${RESOLVED}")"
+    if [[ -e "${ABSOLUTE}" ]]; then
+      echo -n "${ABSOLUTE}"
+      return
+    fi
+  fi
+
+  ABSOLUTE="$(alocation "${P}")"
+  if [[ -e "${ABSOLUTE}" ]]; then
+    echo -n "${ABSOLUTE}"
+    return
+  fi
+
+  echo -n "${P}"
+}
+
 function python_location {
   local PYTHON="{{ARG_PYTHON}}"
   local RUNFILES_INTERPRETER="{{RUNFILES_INTERPRETER}}"
