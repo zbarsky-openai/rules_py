@@ -2,7 +2,7 @@
 Helpers.
 """
 
-def select_chain(name, arms, visibility = ["//visibility:private"]):
+def select_chain(name, arms, default_target = None, visibility = ["//visibility:private"]):
     """
     Generate an ordered select chain.
 
@@ -14,6 +14,7 @@ def select_chain(name, arms, visibility = ["//visibility:private"]):
     Args:
         name (str): The name for the select chain rule.
         arms (list): Ordered selection cases as (condition, target) pairs.
+        default_target (str | None): Optional default target for unmatched configs.
         visibility (list): Visibility spec for the generated conditions.
 
     Returns:
@@ -22,11 +23,11 @@ def select_chain(name, arms, visibility = ["//visibility:private"]):
 
     for index, kv in enumerate(arms.items()):
         condition, target = kv
-        next = "{}_{}".format(name, index + 1) if index + 1 < len(arms) else None
+        next = "{}_{}".format(name, index + 1) if index + 1 < len(arms) else default_target
         native.alias(
             name = "{}{}".format(name, "_{}".format(index) if index > 0 else ""),
             actual = select(
-                # Npte that default comes first so that if the user defines a default, theirs wins.
+                # Note that default comes first so that if the user defines a default, theirs wins.
                 ({"//conditions:default": next} if next else {}) | {
                     condition: target,
                 },
