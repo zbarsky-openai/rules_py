@@ -11,7 +11,8 @@ import shlex
 import shutil
 import sys
 from os import chmod, defpath, environ, listdir, makedirs, mkdir, path, pathsep
-from subprocess import CalledProcessError, check_call
+from subprocess import CalledProcessError, STDOUT, run
+from tempfile import TemporaryFile
 
 _DEBUG_FLAG = "-fdebug-default-version=4"
 _COMPILER_WRAPPER = """#!/usr/bin/env python3
@@ -91,31 +92,38 @@ t = path.join(t, listdir(t)[0])
 outdir = path.abspath(opts.outdir)
 build_env = _compiler_env(tmp_root)
 
-try:
-    if path.exists(path.join(t, "pyproject.toml")):
-        cmd = [
-            sys.executable,
-            "-m", "build",
-            "--wheel",
-            "--no-isolation",
-            "--outdir", outdir,
-        ]
-    elif path.exists(path.join(t, "setup.py")):
-        cmd = [
-            sys.executable,
-            path.realpath(path.join(t, "setup.py")),
-            "bdist_wheel",
-            "--dist-dir",
-            outdir,
-        ]
-    else:
-        print("Error: Unable to detect build command! Neither pyproject nor setup.py found!", file=sys.stderr)
-        exit(1)
-
-    check_call(cmd, cwd=t, env=build_env)
-except CalledProcessError:
-    print("Error: Build failed!\nSee {} for the sandbox".format(t), file=sys.stderr)
+if path.exists(path.join(t, "pyproject.toml")):
+    cmd = [
+        sys.executable,
+        "-m", "build",
+        "--wheel",
+        "--no-isolation",
+        "--outdir", outdir,
+    ]
+elif path.exists(path.join(t, "setup.py")):
+    cmd = [
+        sys.executable,
+        path.realpath(path.join(t, "setup.py")),
+        "bdist_wheel",
+        "--dist-dir",
+        outdir,
+    ]
+else:
+    print("Error: Unable to detect build command! Neither pyproject nor setup.py found!", file=sys.stderr)
     exit(1)
+
+with TemporaryFile(mode="w+") as build_log:
+    try:
+        run(cmd, cwd=t, env=build_env, stdout=build_log, stderr=STDOUT, check=True)
+    except CalledProcessError:
+        build_log.seek(0)
+        output = build_log.read()
+        if output:
+            sys.stderr.write(output)
+            if not output.endswith("\n"):
+                sys.stderr.write("\n")
+        print("Error: Build failed!\nSee {} for the sandbox".format(t), file=sys.stderr)
+        exit(1)
 
 inventory = listdir(outdir)
 
