@@ -71,7 +71,7 @@ def _py_binary_or_test(name, rule, srcs, main, data = [], deps = [], **kwargs):
     )
 
     _py_venv_link(
-        name = "{}.venv".format(name),
+        name = "{}._venv".format(name),
         srcs = srcs,
         data = data,
         deps = deps,
