@@ -84,6 +84,16 @@ def _merge_unique(default_values, annotated_values):
             merged.append(value)
     return merged
 
+def _merge_scc_dep_markers_by_surface_package(marked_deps):
+    merged = {}
+    for dep, markers in marked_deps.items():
+        # SCC external deps are keyed by the fully versioned lock tuple, but the
+        # generated hub targets depend on the surface package alias. Merge
+        # markers for all versions so split dependencies like chdb -> pyarrow
+        # preserve their full platform coverage instead of overwriting each other.
+        merged.setdefault(dep[1], {}).update(markers)
+    return merged
+
 def _parse_hubs(module_ctx):
     """Parses `uv.hub()` declarations from all modules.
 
@@ -380,8 +390,10 @@ def _parse_projects(module_ctx, hub_specs):
                 },
                 scc_deps = {
                     k: {
-                        d[1]: markers
-                        for d, markers in deps.items()
+                        dep_name: markers
+                        for dep_name, markers in _merge_scc_dep_markers_by_surface_package(
+                            deps,
+                        ).items()
                     }
                     for k, deps in scc_deps.items()
                 },
