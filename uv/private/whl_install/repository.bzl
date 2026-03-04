@@ -174,15 +174,25 @@ def _whl_install_impl(repository_ctx):
         for k, v in select_arms.items()
     }
 
-    if repository_ctx.attr.sbuild:
-        select_arms = select_arms | {
-            "//conditions:default": str(repository_ctx.attr.sbuild),
-        }
+    default_target = str(repository_ctx.attr.sbuild) if repository_ctx.attr.sbuild else None
+
+    if (select_arms or prebuilds) and not default_target:
+        default_target = ":whl_missing"
+        content.append(
+            """
+py_library(
+    name = "whl_missing",
+    srcs = [],
+    target_compatible_with = ["@platforms//:incompatible"],
+    visibility = ["//visibility:private"],
+)
+""",
+        )
 
     if prebuilds:
         gazelle_index_whl = prebuilds.values()[0]  # Effectively random choice :shrug:
-    elif repository_ctx.attr.sbuild:
-        gazelle_index_whl = repository_ctx.attr.sbuild
+    elif default_target:
+        gazelle_index_whl = default_target
     else:
         fail("Cannot identify a wheel or sbuild of {} to analyze for Gazelle indexing\n{}".format(repository_ctx.name, pprint(repository_ctx.attr)))
 
@@ -191,6 +201,7 @@ def _whl_install_impl(repository_ctx):
 select_chain(
    name = "whl",
    arms = {arms},
+   default_target = {default_target},
    visibility = ["//visibility:private"],
 )
 
@@ -211,6 +222,7 @@ py_library(
 )
 """.format(
             arms = _format_arms(select_arms),
+            default_target = repr(default_target),
             index_whl = indent(pprint([str(gazelle_index_whl)]), " " * 4).lstrip(),
         ),
     )
