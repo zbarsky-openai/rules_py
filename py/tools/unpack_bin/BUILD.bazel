@@ -9,8 +9,8 @@ rust_binary(
     ],
     deps = [
         "//py/tools/py",
-        "@crates//:clap",
-        "@crates//:miette",
+        "@rules_py_crates//:clap",
+        "@rules_py_crates//:miette",
     ],
 )
 

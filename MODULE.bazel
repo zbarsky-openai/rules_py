@@ -110,7 +110,7 @@ crate = use_extension(
     "crate",
 )
 crate.from_cargo(
-    name = "crates",
+    name = "rules_py_crates",
     cargo_lock = "//:Cargo.lock",
     cargo_toml = "//:Cargo.toml",
     platform_triples = [
@@ -145,7 +145,7 @@ crate.annotation(
     repositories = ["crates"],
     deps = ["@@xz+//:lzma"],
 )
-use_repo(crate, "crates")
+use_repo(crate, "rules_py_crates")
 
 # TODO: Replace with bazel_features?
 # cf. https://github.com/bazel-contrib/bazelrc-preset.bzl/blob/main/MODULE.bazel#L8C1-L10C70
