@@ -261,18 +261,7 @@ def _parse_projects(module_ctx, hub_specs):
                 # default and set if we do a build.
                 has_sbuild = False
 
-                # HACK: If there's a -none-any wheel for the package, then
-                # we can actually skip creating the sdist build because
-                # we'll never use it. This allows projects which can do
-                # anyarch builds from bdists to avoid providing build deps.
-                #
-                # FIXME: This condition is actually incomplete, `py2.py3` wheels
-                # match the same condition.
-                #
-                # FIXME: If we add support for a sdist-only mode then this is
-                # just wrong.
-                has_none_any = any(["-none-any.whl" in it["url"] for it in package.get("wheels", [])])
-                if sdist and not (has_none_any and project.elide_sbuilds_with_anyarch):
+                if sdist:
                     # HACK: Note that we resolve these LAZILY so that
                     # bdist-only or fully overridden configurations don't
                     # have to provide the build tools.
