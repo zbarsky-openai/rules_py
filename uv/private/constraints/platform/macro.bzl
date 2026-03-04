@@ -18,10 +18,10 @@ load(":defs.bzl", "platform_version_at_least")
 # ios_13_0_arm64_iphonesimulator
 # ios_13_0_x86_64_iphonesimulator
 
-## These seem wrong and/or are defined by Conda not packaging
+# We intentionally support generic linux_* tags because some upstream wheels,
+# notably PyTorch CPU wheels, still publish them.
 # linux_armv6l
 # linux_armv7l
-# linux_x86_64
 # macosx
 
 # See
@@ -34,7 +34,7 @@ platform_repo_name_mangling = {
         [["amd64", "x86_64", "x64"], "x86_64"],
         [["ppc", "ppc64"], "ppc"],
         [["ppc64le"], "ppc64le"],
-        [["arm", "armv7l"], "arm"],
+        [["arm", "armv6l", "armv7l"], "arm"],
         [["aarch64"], "aarch64"],
         [["s390x", "s390"], "s390x"],
         [["mips64el", "mips64"], "mips64"],
@@ -214,7 +214,35 @@ def generate_musllinux(visibility):
 
 # buildifier: disable=unnamed-macro
 # buildifier: disable=function-docstring
+def generate_linux(visibility):
+    # Generic linux tags are less precise than manylinux/musllinux because they
+    # do not encode libc details, but packaging still generates them and some
+    # upstream projects only publish linux_* wheels.
+    arches = [
+        "x86_64",
+        "i686",
+        "aarch64",
+        "ppc64",
+        "ppc64le",
+        "s390x",
+        "riscv64",
+        "armv6l",
+    ]
+
+    for arch in arches:
+        native.config_setting(
+            name = "linux_{}".format(arch),
+            constraint_values = [
+                "@platforms//os:linux",
+                "@platforms//cpu:{}".format(platform_repo_name_mangling.get(arch, arch)),
+            ],
+            visibility = visibility,
+        )
+
+# buildifier: disable=unnamed-macro
+# buildifier: disable=function-docstring
 def generate(visibility):
     generate_macos(visibility = visibility)
     generate_manylinux(visibility = visibility)
     generate_musllinux(visibility = visibility)
+    generate_linux(visibility = visibility)
