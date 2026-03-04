@@ -124,25 +124,25 @@ crate.annotation(
     crate = "backtrace",
     # This just compiles code on Android, we don't need it.
     gen_build_script = "off",
-    repositories = ["crates"],
+    repositories = ["rules_py_crates"],
 )
 crate.annotation(
     crate = "zstd-sys",
     # This build script is naughty and tries to depend on system zstd or build it from source.
     gen_build_script = "off",
-    repositories = ["crates"],
+    repositories = ["rules_py_crates"],
     deps = ["@@zstd+//:zstd"],
 )
 crate.annotation(
     crate = "bzip2-sys",
     gen_build_script = "off",
-    repositories = ["crates"],
+    repositories = ["rules_py_crates"],
     deps = ["@@bzip2+//:bz2"],
 )
 crate.annotation(
     crate = "lzma-sys",
     gen_build_script = "off",
-    repositories = ["crates"],
+    repositories = ["rules_py_crates"],
     deps = ["@@xz+//:lzma"],
 )
 use_repo(crate, "rules_py_crates")
