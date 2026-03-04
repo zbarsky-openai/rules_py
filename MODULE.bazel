@@ -6,7 +6,7 @@ module(
 )
 
 # NOTE: when publishing to BCR, we patch this to True, as we publish pre-built binaries along with our releases.
-IS_RELEASE = False
+IS_RELEASE = True
 
 bazel_dep(name = "bazel_features", version = "1.38.0")
 bazel_dep(name = "bazel_lib", version = "3.0.0")
