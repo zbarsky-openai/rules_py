@@ -91,3 +91,56 @@ lighter weight since the toolchain's files aren't inputs.
         PyInfo,
     ],
 )
+
+def _whl_dist_info(ctx):
+    archive = ctx.attr.src[DefaultInfo].files.to_list()[0]
+    dist_info_dir = ctx.actions.declare_directory("dist_info")
+    entry_points_txt = ctx.actions.declare_file("entry_points.txt")
+
+    args = ctx.actions.args()
+    args.add_all([
+        "--wheel",
+        archive.path,
+        "--dist-info-dir",
+        dist_info_dir.path,
+        "--entry-points-out",
+        entry_points_txt.path,
+    ])
+
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = [archive],
+        outputs = [
+            dist_info_dir,
+            entry_points_txt,
+        ],
+        mnemonic = "WhlDistInfo",
+        progress_message = "Extracting wheel dist-info %{label}",
+    )
+
+    return [DefaultInfo(files = depset([
+        dist_info_dir,
+        entry_points_txt,
+    ]))]
+
+whl_dist_info = rule(
+    implementation = _whl_dist_info,
+    doc = """
+Private implementation detail of aspect_rules_py//uv.
+
+Extracts dist-info metadata from the selected wheel so consumers such as
+rules_python's py_console_script_binary can discover entry_points.txt.
+""",
+    attrs = {
+        "src": attr.label(doc = "The wheel to inspect."),
+        "_tool": attr.label(
+            default = "//uv/private/whl_install:extract_dist_info",
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+    provides = [
+        DefaultInfo,
+    ],
+)

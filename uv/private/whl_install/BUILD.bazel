@@ -1,4 +1,5 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("//py:defs.bzl", "py_binary")
 
 package(default_visibility = [
     "//docs:__pkg__",
@@ -24,4 +25,10 @@ bzl_library(
         "//uv/private:parse_whl_name",
         "//uv/private/constraints/platform:defs",
     ],
+)
+
+py_binary(
+    name = "extract_dist_info",
+    srcs = ["extract_dist_info.py"],
+    main = "extract_dist_info.py",
 )

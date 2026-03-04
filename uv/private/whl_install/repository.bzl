@@ -114,7 +114,7 @@ def _whl_install_impl(repository_ctx):
     content = [
         "load(\"@aspect_rules_py//py:defs.bzl\", \"py_library\")",
         "load(\"@aspect_rules_py//uv/private/whl_install:defs.bzl\", \"select_chain\")",
-        "load(\"@aspect_rules_py//uv/private/whl_install:rule.bzl\", \"whl_install\")",
+        "load(\"@aspect_rules_py//uv/private/whl_install:rule.bzl\", \"whl_dist_info\", \"whl_install\")",
         "load(\"@bazel_skylib//lib:selects.bzl\", \"selects\")",
     ]
 
@@ -234,6 +234,11 @@ whl_install(
     name = "actual_install",
     src = ":whl",
     visibility = ["//visibility:private"],
+)
+whl_dist_info(
+    name = "dist_info",
+    src = ":whl",
+    visibility = ["//visibility:public"],
 )
 alias(
     name = "install",

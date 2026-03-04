@@ -5,9 +5,39 @@ Machinery specific to interacting with a uv.lock
 load("//uv/private:normalize_name.bzl", "normalize_name")
 load("//uv/private:parse_whl_name.bzl", "parse_whl_name")
 load("//uv/private:sha1.bzl", "sha1")
+load("//uv/private/constraints:defs.bzl", "MAJORS", "MINORS")
 load("//uv/private/constraints/platform:defs.bzl", "supported_platform")
 load("//uv/private/constraints/python:defs.bzl", "supported_python")
 load(":git_utils.bzl", "parse_git_url", "try_git_to_http_archive")
+
+_REPO_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+
+def _repo_safe(value):
+    acc = []
+    for i in range(len(value)):
+        ch = value[i]
+        acc.append(ch if ch in _REPO_NAME_CHARS else "_")
+    return "".join(acc)
+
+def _compatible_python_tags(python_tag, abi_tag):
+    if abi_tag != "abi3" or not python_tag.startswith("cp"):
+        return [python_tag]
+
+    major = int(python_tag[2])
+    minor = int(python_tag[3:]) if python_tag[3:] else 0
+    compatible = []
+    for candidate_major in MAJORS:
+        if candidate_major != major:
+            continue
+        for candidate_minor in MINORS:
+            if candidate_minor < minor:
+                continue
+
+            candidate = "cp{}{}".format(candidate_major, candidate_minor)
+            if supported_python(candidate):
+                compatible.append(candidate)
+
+    return compatible if compatible else [python_tag]
 
 def normalize_deps(lock_id, lock_data):
     """Normalizes dependency specifications in a lockfile.
@@ -177,33 +207,34 @@ def collect_configurations(lock):
 
     for wheel_name in wheel_files.keys():
         parsed_wheel = parse_whl_name(wheel_name)
-        for python_tag in parsed_wheel.python_tags:
-            # Ignore configurations for unsupported interpreters
-            if not supported_python(python_tag):
+        for platform_tag in parsed_wheel.platform_tags:
+            # Ignore configurations for unsupported platforms
+            if not supported_platform(platform_tag):
                 continue
 
-            python_tags[python_tag] = 1
+            platform_tags[platform_tag] = 1
 
-            for platform_tag in parsed_wheel.platform_tags:
-                # Ignore configurations for unsupported platforms
-                if not supported_platform(platform_tag):
-                    continue
+            for abi_tag in parsed_wheel.abi_tags:
+                abi_tags[abi_tag] = 1
 
-                platform_tags[platform_tag] = 1
+                for python_tag in parsed_wheel.python_tags:
+                    for compatible_python_tag in _compatible_python_tags(python_tag, abi_tag):
+                        # Ignore configurations for unsupported interpreters
+                        if not supported_python(compatible_python_tag):
+                            continue
 
-                for abi_tag in parsed_wheel.abi_tags:
-                    abi_tags[abi_tag] = 1
+                        python_tags[compatible_python_tag] = 1
 
-                    # Note that we are NOT filtering out
-                    # impossible/unsatisfiable python+abi tag possibilities.
-                    # It's not aesthetic but it is simple enough.
-                    configuration = "{}-{}-{}".format(python_tag, platform_tag, abi_tag)
+                        # Note that we are NOT filtering out
+                        # impossible/unsatisfiable python+abi tag possibilities.
+                        # It's not aesthetic but it is simple enough.
+                        configuration = "{}-{}-{}".format(compatible_python_tag, platform_tag, abi_tag)
 
-                    configurations[configuration] = [
-                        "@aspect_rules_py//uv/private/constraints/platform:{}".format(platform_tag),
-                        "@aspect_rules_py//uv/private/constraints/abi:{}".format(abi_tag),
-                        "@aspect_rules_py//uv/private/constraints/python:{}".format(python_tag),
-                    ]
+                        configurations[configuration] = [
+                            "@aspect_rules_py//uv/private/constraints/platform:{}".format(platform_tag),
+                            "@aspect_rules_py//uv/private/constraints/abi:{}".format(abi_tag),
+                            "@aspect_rules_py//uv/private/constraints/python:{}".format(compatible_python_tag),
+                        ]
 
     return configurations
 
@@ -255,7 +286,8 @@ def collect_sdists(
     sdist_specs = {}
     sdist_table = {}
     for package in lock_data.get("package", []):
-        k = "sdist_build__{}__{}__{}".format(lock_id, package["name"], package["version"].replace(".", "_"))
+        version_id = _repo_safe(package["version"].replace(".", "_"))
+        k = "sdist_build__{}__{}__{}".format(lock_id, package["name"], version_id)
         if "sdist" in package:
             sdist = package["sdist"]
 

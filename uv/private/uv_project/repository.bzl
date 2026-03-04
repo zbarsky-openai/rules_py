@@ -35,6 +35,7 @@ def _project_impl(repository_ctx):
 
     # These are provided as JSON strings and must be decoded.
     dep_to_scc = json.decode(repository_ctx.attr.dep_to_scc)
+    dep_to_install = json.decode(repository_ctx.attr.dep_to_install)
     scc_deps = json.decode(repository_ctx.attr.scc_deps)
     scc_graph = json.decode(repository_ctx.attr.scc_graph)
 
@@ -113,6 +114,12 @@ config_setting(
     content = ["""\
 load("@aspect_rules_py//py:defs.bzl", "py_library")
 
+filegroup(
+    name = "empty_dist_info",
+    srcs = [],
+    visibility = ["//visibility:private"],
+)
+
 """]
     for package, cfgs in dep_to_scc.items():
         content.append("""
@@ -120,6 +127,8 @@ load("@aspect_rules_py//py:defs.bzl", "py_library")
 {}
 """.format(package, indent(pprint(cfgs), "# ")))
         main_arms = {}
+        dist_info_main_arms = {}
+        package_install_cfgs = dep_to_install.get(package, {})
 
         # FIXME: Handle markers for distinct versions
         for cfg, scc_cfgs in cfgs.items():
@@ -150,6 +159,9 @@ load("@aspect_rules_py//py:defs.bzl", "py_library")
 
                         cfg_arms[marker] = "//private/sccs:" + scc
 
+            if "//conditions:default" not in cfg_arms:
+                cfg_arms["//conditions:default"] = "//private/sccs:empty"
+
             # Now we can just build one big choice alias from that arm set.
             content.append("""
 alias(
@@ -159,7 +171,40 @@ alias(
 )
 """.format(name = cfg_name, arms = indent(pprint(cfg_arms), " " * 4).lstrip()))
 
+            install_arms = {}
+            for install, markers in package_install_cfgs.get(cfg, {}).items():
+                target = install.replace(":install", ":dist_info")
+                if "" in markers:
+                    if "//conditions:default" in install_arms:
+                        fail("Configuration conflict! Package {} specifies two or more default dist-info states!\n{}".format(package, pprint(package_install_cfgs.get(cfg, {}))))
+
+                    install_arms["//conditions:default"] = target
+                else:
+                    for marker in markers.keys():
+                        marker = _marker(marker)
+                        if marker in install_arms:
+                            fail("Configuration conflict! Package {} specifies two or more dist-info states for the same marker!\n{}".format(package, pprint(package_install_cfgs.get(cfg, {}))))
+
+                        install_arms[marker] = target
+
+            if "//conditions:default" not in install_arms:
+                install_arms["//conditions:default"] = ":empty_dist_info"
+
+            dist_info_cfg_name = "{}__dist_info".format(cfg_name)
+            dist_info_main_arms["//private/venv:" + cfg] = ":" + dist_info_cfg_name
+            content.append("""
+alias(
+    name = "{name}",
+    actual = select({arms}),
+    visibility = ["//visibility:private"],
+)
+""".format(name = dist_info_cfg_name, arms = indent(pprint(install_arms), " " * 4).lstrip()))
+
         # Finally we can render the wrapper over all the component arms
+        package_arms = dict(main_arms)
+        if len(package_arms) == 1:
+            package_arms["//conditions:default"] = package_arms.values()[0]
+
         content.append("""
 alias(
     name = "{name}",
@@ -168,7 +213,21 @@ alias(
 )
 """.format(
             name = package,
-            arms = indent(pprint(main_arms), " " * 4).lstrip(),
+            arms = indent(pprint(package_arms), " " * 4).lstrip(),
+        ))
+        dist_info_arms = dict(dist_info_main_arms)
+        if len(dist_info_arms) == 1:
+            dist_info_arms["//conditions:default"] = dist_info_arms.values()[0]
+
+        content.append("""
+alias(
+    name = "{name}_dist_info",
+    actual = select({arms}),
+    visibility = ["//visibility:public"],
+)
+""".format(
+            name = package,
+            arms = indent(pprint(dist_info_arms), " " * 4).lstrip(),
         ))
 
     # As part of this root repo we also lay down :all_requirements which is slightly tricky because we have to
@@ -207,7 +266,7 @@ py_library(
     srcs = [],
     deps = [],
     imports = [],
-    visibility = ["//visibility:private"],
+    visibility = ["//:__pkg__", "//:__subpackages__"],
 )
 """]
 
@@ -274,6 +333,7 @@ uv_project = repository_rule(
     implementation = _project_impl,
     attrs = {
         "dep_to_scc": attr.string(),
+        "dep_to_install": attr.string(),
         "scc_deps": attr.string(),
         "scc_graph": attr.string(),
     },

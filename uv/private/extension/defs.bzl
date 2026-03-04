@@ -66,6 +66,24 @@ load(":graph_utils.bzl", "activate_extras", "collect_sccs")
 load(":lockfile.bzl", "build_marker_graph", "collect_bdists", "collect_configurations", "collect_markers", "collect_sdists", "normalize_deps")
 load(":projectfile.bzl", "collate_versions_by_name", "collect_activated_extras", "extract_requirement_marker_pairs")
 
+_REPO_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+
+def _repo_safe(value):
+    acc = []
+    for i in range(len(value)):
+        ch = value[i]
+        acc.append(ch if ch in _REPO_NAME_CHARS else "_")
+    return "".join(acc)
+
+def _merge_build_deps(default_build_deps, annotated_build_deps):
+    merged = []
+    seen = {}
+    for dep in default_build_deps + annotated_build_deps:
+        if dep not in seen:
+            seen[dep] = 1
+            merged.append(dep)
+    return merged
+
 def _parse_hubs(module_ctx):
     """Parses `uv.hub()` declarations from all modules.
 
@@ -147,7 +165,7 @@ def _parse_projects(module_ctx, hub_specs):
             project_id = "project__" + project_stamp
 
             # Read these from the project or honor the module state
-            project_name = project.name or project_data["project"]["name"]
+            project_name = normalize_name(project.name or project_data["project"]["name"])
 
             # FIXME: Error if this wasn't provided and the version is marked as dynamic
             project_version = project.version or project_data["project"]["version"]
@@ -187,6 +205,7 @@ def _parse_projects(module_ctx, hub_specs):
                         fail("Overridden project {} neither specifies a version nor has an implied singular version in the lockfile!".format(override.name, project.lock))
                     k = (project_id, normalize_name(override.name), v, "__base__")
                     print("Overriding {}@{} in {} with {}".format(override.name, v, project_name, override.target))
+                    overridden_packages[k] = 1
                     install_table[k] = str(override.target)
 
             # Lazily evaluated cache
@@ -241,7 +260,7 @@ def _parse_projects(module_ctx, hub_specs):
             # Translate the package lock into installs for this project
             for package in lock_data.get("package", []):
                 install_key = (project_id, package["name"], package["version"], "__base__")
-                if install_key in install_table:
+                if install_key in overridden_packages:
                     # Case of an overridden package
                     continue
                 elif "editable" in package["source"] or "virtual" in package["source"]:
@@ -252,9 +271,11 @@ def _parse_projects(module_ctx, hub_specs):
                     else:
                         fail("Virtual package {} in lockfile {} doesn't have a mandatory `uv.override_package()` annotation!".format(package["name"], project.lock))
 
-                k = "whl_install__{}__{}__{}".format(project_stamp, package["name"], package["version"].replace(".", "_"))
+                version_id = _repo_safe(package["version"].replace(".", "_"))
+                k = "whl_install__{}__{}__{}".format(project_stamp, package["name"], version_id)
                 install_table[install_key] = "@{}//:install".format(k)
-                sbuild_id = "sdist_build__{}__{}__{}".format(project_stamp, package["name"], package["version"].replace(".", "_"))
+                existing_install_cfg = install_cfgs.get(k)
+                sbuild_id = "sdist_build__{}__{}__{}".format(project_stamp, package["name"], version_id)
                 sdist = sdist_table.get(sbuild_id)
 
                 # WARNING: Loop invariant; this flag needs to be False by
@@ -270,16 +291,18 @@ def _parse_projects(module_ctx, hub_specs):
                     # property if it exists for the sdist. Question is how
                     # to defer choosing deps until the repo rule when we
                     # could do pyproject.toml introspection.
+                    if lock_build_deps == None:
+                        lock_build_deps = [
+                            it[0]
+                            for req in project.default_build_dependencies
+                            for it in extract_requirement_marker_pairs(project.lock, req, default_versions)
+                        ]
+
                     build_deps = lock_build_dep_anns.get(install_key)
                     if build_deps == None:
-                        if lock_build_deps == None:
-                            lock_build_deps = [
-                                it[0]
-                                for req in project.default_build_dependencies
-                                for it in extract_requirement_marker_pairs(project.lock, req, default_versions)
-                            ]
-
                         build_deps = lock_build_deps
+                    else:
+                        build_deps = _merge_build_deps(lock_build_deps, build_deps)
 
                     sbuild_specs[sbuild_id] = struct(
                         src = sdist,
@@ -291,9 +314,17 @@ def _parse_projects(module_ctx, hub_specs):
 
                     has_sbuild = True
 
+                whls = {}
+                if existing_install_cfg:
+                    whls.update(existing_install_cfg.whls)
+                whls.update({
+                    whl["url"].split("/")[-1].split("?")[0].split("#")[0]: bdist_table.get(whl["hash"])
+                    for whl in package.get("wheels", [])
+                })
+
                 install_cfgs[k] = struct(
-                    whls = {whl["url"].split("/")[-1].split("?")[0].split("#")[0]: bdist_table.get(whl["hash"]) for whl in package.get("wheels", [])},
-                    sbuild = "@{}//:whl".format(sbuild_id) if has_sbuild else None,
+                    whls = whls,
+                    sbuild = existing_install_cfg.sbuild if existing_install_cfg and existing_install_cfg.sbuild else "@{}//:whl".format(sbuild_id) if has_sbuild else None,
                 )
 
             # Frustratingly we have to re-key all these structures so that they
@@ -304,6 +335,17 @@ def _parse_projects(module_ctx, hub_specs):
             # FIXME: Can we make a re-keying helper?
             project_cfgs[project_id] = struct(
                 dep_to_scc = marked_package_cfg_sccs,
+                dep_to_install = {
+                    package: {
+                        cfg: {
+                            install_table[version]: markers
+                            for version, markers in versions.items()
+                            if version in install_table
+                        }
+                        for cfg, versions in cfgs.items()
+                    }
+                    for package, cfgs in version_activations.items()
+                },
                 scc_deps = {
                     k: {
                         d[1]: markers
@@ -439,6 +481,7 @@ def _uv_impl(module_ctx):
         uv_project(
             name = project_id,
             dep_to_scc = json.encode(project_cfg.dep_to_scc),
+            dep_to_install = json.encode(project_cfg.dep_to_install),
             scc_deps = json.encode(project_cfg.scc_deps),
             scc_graph = json.encode(project_cfg.scc_graph),
         )
@@ -472,6 +515,7 @@ _project_tag = tag_class(
             default = [
                 "build",
                 "setuptools",
+                "wheel",
             ],
         ),
     },

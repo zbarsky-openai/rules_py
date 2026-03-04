@@ -622,6 +622,15 @@ def _resolve(package, lock_id, default_versions):
     else:
         fail("Unable to identify id for package {} for lock {}".format(package, lock_id, pprint(default_versions)))
 
+def _merge_build_deps(default_build_deps, annotated_build_deps):
+    merged = []
+    seen = {}
+    for dep in default_build_deps + annotated_build_deps:
+        if dep not in seen:
+            seen[dep] = 1
+            merged.append(dep)
+    return merged
+
 def _process_overridden_packages(mod, project, lock_id, default_versions, install_table):
     # FIXME: This inner join is correct and easy, but it doesn't allow us to warn if there are annotations that don't join.
     for override in mod.tags.override_package:
@@ -682,16 +691,18 @@ def _process_lock_file(module_ctx, mod, project, lock_id, lock_data, default_ver
             # property if it exists for the sdist. Question is how
             # to defer choosing deps until the repo rule when we
             # could do pyproject.toml introspection.
+            if lock_build_deps == None:
+                lock_build_deps = [
+                    it[0]
+                    for req in project.default_build_dependencies
+                    for it in _extract_requirement_marker_pairs(req, default_versions)
+                ]
+
             build_deps = lock_build_dep_anns.get(install_key)
             if build_deps == None:
-                if lock_build_deps == None:
-                    lock_build_deps = [
-                        it[0]
-                        for req in project.default_build_dependencies
-                        for it in _extract_requirement_marker_pairs(req, default_versions)
-                    ]
-
                 build_deps = lock_build_deps
+            else:
+                build_deps = _merge_build_deps(lock_build_deps, build_deps)
 
             sbuild_specs[sbuild_id] = struct(
                 src = sdist,
