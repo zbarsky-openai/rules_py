@@ -10,9 +10,14 @@ from argparse import ArgumentParser
 import shlex
 import shutil
 import sys
-from os import chmod, defpath, environ, listdir, makedirs, mkdir, path, pathsep
+from os import chmod, defpath, environ, listdir, makedirs, path, pathsep
 from subprocess import CalledProcessError, STDOUT, run
 from tempfile import TemporaryFile
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 _DEBUG_FLAG = "-fdebug-default-version=4"
 _COMPILER_WRAPPER = """#!/usr/bin/env python3
@@ -23,6 +28,12 @@ filtered_args = [arg for arg in sys.argv[1:] if arg != "{debug_flag}"]
 compiler = os.path.basename(sys.argv[0])
 os.execvp(compiler, [compiler] + filtered_args)
 """.format(debug_flag = _DEBUG_FLAG)
+
+_SETUPTOOLS_BACKENDS = (
+    None,
+    "setuptools.build_meta",
+    "setuptools.build_meta:__legacy__",
+)
 
 
 def _make_compiler_wrapper(tmpdir, name):
@@ -71,14 +82,72 @@ def _compiler_env(tmpdir):
     return env
 
 
+def _load_text(maybe_file):
+    if not path.exists(maybe_file):
+        return ""
+
+    with open(maybe_file, encoding="utf-8", errors="ignore") as f:
+        return f.read()
+
+
+def _load_pyproject_data(worktree):
+    pyproject = path.join(worktree, "pyproject.toml")
+    if not path.exists(pyproject):
+        return None
+
+    try:
+        with open(pyproject, "rb") as f:
+            return tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+
+
+def _setuptools_backend_with_setup_py(worktree):
+    if not path.exists(path.join(worktree, "setup.py")):
+        return False
+
+    pyproject_data = _load_pyproject_data(worktree)
+    if not pyproject_data:
+        return False
+
+    return pyproject_data.get("build-system", {}).get("build-backend") in _SETUPTOOLS_BACKENDS
+
+
+def _legacy_metadata_conflicts_with_pyproject(worktree):
+    setup_py = path.join(worktree, "setup.py")
+    pyproject_data = _load_pyproject_data(worktree)
+    if not (pyproject_data and path.exists(setup_py)):
+        return False
+
+    build_backend = pyproject_data.get("build-system", {}).get("build-backend")
+    if build_backend not in _SETUPTOOLS_BACKENDS:
+        return False
+
+    project = pyproject_data.get("project")
+    if not project:
+        return False
+
+    dynamic = set(project.get("dynamic", []))
+    legacy_metadata = _load_text(setup_py) + "\n" + _load_text(path.join(worktree, "setup.cfg"))
+
+    return (
+        ("dependencies" not in project and "dependencies" not in dynamic and "install_requires" in legacy_metadata) or
+        (
+            "optional-dependencies" not in project and
+            "optional-dependencies" not in dynamic and
+            "extras_require" in legacy_metadata
+        )
+    )
+
+
 PARSER = ArgumentParser()
 PARSER.add_argument("srcarchive")
 PARSER.add_argument("outdir")
 PARSER.add_argument("--validate-anyarch", action="store_true")
 opts, args = PARSER.parse_known_args()
 
-tmp_root = opts.outdir.lstrip("/") + ".tmp"
-mkdir(tmp_root)
+tmp_root = path.abspath(opts.outdir) + ".tmp"
+makedirs(tmp_root, exist_ok = True)
 
 t = path.join(tmp_root, "worktree")
 
@@ -92,14 +161,37 @@ t = path.join(t, listdir(t)[0])
 outdir = path.abspath(opts.outdir)
 build_env = _compiler_env(tmp_root)
 
-if path.exists(path.join(t, "pyproject.toml")):
+if _legacy_metadata_conflicts_with_pyproject(t):
+    print(
+        "Warning: falling back to setup.py because pyproject.toml omits dynamic dependency metadata "
+        "that setuptools still reads from setup.py/setup.cfg.",
+        file=sys.stderr,
+    )
     cmd = [
         sys.executable,
-        "-m", "build",
-        "--wheel",
-        "--no-isolation",
-        "--outdir", outdir,
+        path.realpath(path.join(t, "setup.py")),
+        "bdist_wheel",
+        "--dist-dir",
+        outdir,
     ]
+elif path.exists(path.join(t, "pyproject.toml")):
+    if _setuptools_backend_with_setup_py(t):
+        cmd = [
+            sys.executable,
+            path.realpath(path.join(t, "setup.py")),
+            "bdist_wheel",
+            "--dist-dir",
+            outdir,
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            "-m", "build",
+            "--wheel",
+            "--no-isolation",
+            "--outdir",
+            outdir,
+        ]
 elif path.exists(path.join(t, "setup.py")):
     cmd = [
         sys.executable,
