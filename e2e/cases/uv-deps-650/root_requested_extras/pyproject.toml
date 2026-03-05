@@ -1,0 +1,16 @@
+[project]
+name = "root_requested_extras"
+version = "0.0.0"
+requires-python = ">=3.11"
+authors = []
+dependencies = [
+    "urllib3[brotli]",
+]
+
+[dependency-groups]
+root_requested_extras = [
+    "urllib3",
+    "build",
+    "setuptools",
+    "wheel",
+]

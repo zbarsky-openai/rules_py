@@ -115,6 +115,11 @@ uv.project(
     lock = "//cases/uv-deps-650/extras:uv.lock",
     pyproject = "//cases/uv-deps-650/extras:pyproject.toml",
 )
+uv.project(
+    hub_name = "pypi",
+    lock = "//cases/uv-deps-650/root_requested_extras:uv.lock",
+    pyproject = "//cases/uv-deps-650/root_requested_extras:pyproject.toml",
+)
 # }}}
 
 # For cases/uv-workspace-789
