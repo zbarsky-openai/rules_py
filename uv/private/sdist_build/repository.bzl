@@ -220,6 +220,7 @@ py_venv_binary(
     main = "@aspect_rules_py//uv/private/pep517_whl:build_helper.py",
     srcs = ["@aspect_rules_py//uv/private/pep517_whl:build_helper.py"],
     deps = {deps},
+    python_version = {python_version},
 )
 
 {rule}(
@@ -233,6 +234,7 @@ py_venv_binary(
 """.format(
         src = repository_ctx.attr.src,
         deps = repr(all_deps),
+        python_version = repr(repository_ctx.attr.python_version) if repository_ctx.attr.python_version else "None",
         rule = "pep517_native_whl" if is_native else "pep517_whl",
         version = repository_ctx.attr.version,
         patch_attrs = patch_attrs,
@@ -243,6 +245,7 @@ sdist_build = repository_rule(
     attrs = {
         "src": attr.label(),
         "deps": attr.label_list(),
+        "python_version": attr.string(),
         "available_deps": attr.string(
             default = "",
             doc = "JSON-encoded dict mapping normalized package names to install " +
