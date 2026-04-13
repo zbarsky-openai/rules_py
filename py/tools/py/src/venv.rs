@@ -1025,6 +1025,21 @@ pub fn populate_venv(
             continue;
         }
 
+        if matches!(
+            dest.file_name().and_then(|name| name.to_str()),
+            Some(
+                "BUILD"
+                    | "BUILD.bazel"
+                    | "MODULE.bazel"
+                    | "REPO.bazel"
+                    | "WORKSPACE"
+                    | "WORKSPACE.bazel"
+                    | "WORKSPACE.bzlmod"
+            )
+        ) {
+            continue;
+        }
+
         // Refill the plan
         plan.push(sources.last().unwrap().clone());
 
