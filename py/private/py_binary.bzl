@@ -82,7 +82,7 @@ def _py_binary_rule_impl(ctx):
             "{{ARG_VENV_NAME}}": ".{}.venv".format(ctx.attr.name),
             "{{ARG_PTH_FILE}}": to_rlocation_path(ctx, site_packages_pth_file),
             "{{ENTRYPOINT}}": to_rlocation_path(ctx, main),
-            "{{PYTHON_ENV}}": "\n".join(_dict_to_exports(default_env)).strip(),
+            "{{PYTHON_ENV}}": "\n".join(_dict_to_exports(default_env | passed_env)).strip(),
             "{{EXEC_PYTHON_BIN}}": "python{}".format(
                 py_toolchain.interpreter_version_info.major,
             ),
