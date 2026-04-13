@@ -26,6 +26,57 @@ _SETUPTOOLS_BACKENDS = (
 )
 
 
+def _is_valid_java_home(java_home):
+    if not java_home:
+        return False
+
+    for include_dir in ["include", "Headers"]:
+        if path.exists(path.join(java_home, include_dir, "jni.h")):
+            return True
+
+    return False
+
+
+def _discover_java_home(search_path):
+    seen = set()
+    candidates = []
+
+    env_home = os.environ.get("JAVA_HOME")
+    if env_home:
+        candidates.append(env_home)
+
+    for tool in ["javac", "java"]:
+        tool_path = shutil.which(tool, path=search_path)
+        if tool_path:
+            candidates.append(path.dirname(path.dirname(path.realpath(tool_path))))
+
+    for seed in [
+        path.abspath("."),
+        path.dirname(path.realpath(sys.executable)),
+        path.dirname(path.realpath(__file__)),
+    ]:
+        current = seed
+        while True:
+            install_dir = path.join(current, "install")
+            if path.isdir(install_dir):
+                for install_base in listdir(install_dir):
+                    candidates.append(path.join(install_dir, install_base, "embedded_tools", "jdk"))
+
+            parent = path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        if _is_valid_java_home(candidate):
+            return candidate
+
+    return None
+
+
 def _load_text(maybe_file):
     if not path.exists(maybe_file):
         return ""
@@ -120,6 +171,10 @@ build_env.update({
     "TEMP": tmp_root,
     "TEMPDIR": tmp_root,
 })
+if not build_env.get("JAVA_HOME"):
+    java_home = _discover_java_home(build_env["PATH"])
+    if java_home:
+        build_env["JAVA_HOME"] = java_home
 
 if _legacy_metadata_conflicts_with_pyproject(t):
     print(
