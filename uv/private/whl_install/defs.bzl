@@ -21,6 +21,17 @@ def select_chain(name, arms, default_target = None, visibility = ["//visibility:
         Nothing.
     """
 
+    if not arms:
+        if not default_target:
+            fail("select_chain({}) requires at least one arm or a default_target".format(name))
+
+        native.alias(
+            name = name,
+            actual = default_target,
+            visibility = visibility,
+        )
+        return
+
     for index, kv in enumerate(arms.items()):
         condition, target = kv
         next = "{}_{}".format(name, index + 1) if index + 1 < len(arms) else default_target

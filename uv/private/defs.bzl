@@ -1,5 +1,6 @@
 "Internal helpers."
 
+load("@rules_python//python:defs.bzl", "PyInfo")
 load("@with_cfg.bzl", "with_cfg")
 load("//py:defs.bzl", "py_library")
 
@@ -25,8 +26,13 @@ whl_mode_transition = transition(
     outputs = [LIB_MODE],
 )
 
+def _whl_requirement_sources(target):
+    if PyInfo in target:
+        return target[PyInfo].transitive_sources
+    return target[DefaultInfo].files
+
 def _whl_requirements_impl(ctx):
-    return [DefaultInfo(files = depset(transitive = [s.files for s in ctx.attr.srcs]))]
+    return [DefaultInfo(files = depset(transitive = [_whl_requirement_sources(s) for s in ctx.attr.srcs]))]
 
 whl_requirements = rule(
     implementation = _whl_requirements_impl,

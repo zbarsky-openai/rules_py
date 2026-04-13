@@ -293,12 +293,10 @@ whl_install(
 py_library(
     name = "install",
     srcs = [],
-    deps = [
-        select({{
-            "@aspect_rules_py//uv/private/constraints:libs_are_libs": ":actual_install",
-            "@aspect_rules_py//uv/private/constraints:libs_are_whls": ":whl_lib",
-        }}),
-    ] + {extra_deps},
+    deps = select({{
+            "@aspect_rules_py//uv/private/constraints:libs_are_libs": [":actual_install"],
+            "@aspect_rules_py//uv/private/constraints:libs_are_whls": [":whl_lib"],
+        }}) + {extra_deps},
     data = {extra_data},
     visibility = ["//visibility:public"],
 )
