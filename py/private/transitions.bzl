@@ -53,3 +53,18 @@ python_transition = transition(
 
 # The old name, FIXME: refactor this out
 python_version_transition = python_transition
+
+# Data deps are packaged into runfiles and should not inherit custom py_binary/py_venv
+# virtualenv settings. We reset back to the default one to match the default .bazelrc settings.
+def _reset_python_flags_transition_impl(_settings, _attr):
+    return {
+        VENV_FLAG: "bazel-pypi-lock",
+    }
+
+reset_python_flags_transition = transition(
+    implementation = _reset_python_flags_transition_impl,
+    inputs = [],
+    outputs = [
+        VENV_FLAG,
+    ],
+)
