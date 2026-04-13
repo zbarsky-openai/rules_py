@@ -100,13 +100,7 @@ fn unpack_cmd_handler(args: UnpackArgs) -> miette::Result<()> {
             .into_diagnostic()
             .wrap_err("Failed to launch compileall")?;
 
-        if !status.success() {
-            eprintln!(
-                "WARNING: compileall exited with status {} for {} (non-fatal)",
-                status,
-                site_packages.display()
-            );
-        }
+        let _ = status;
     }
 
     Ok(())
