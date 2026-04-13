@@ -13,10 +13,12 @@ Requires Python >= 3.11 (for tomllib).
 """
 
 import configparser
+import contextlib
 import importlib
 import os
 import importlib.abc
 import importlib.machinery
+import io
 import json
 import re
 import sys
@@ -301,7 +303,9 @@ def _parse_setup_py_requires(content):
             "setup": _fake_setup,
         }
 
-        exec(compile(content, "setup.py", "exec"), globs)
+        # setup.py often prints banners or probe output; keep stdout pure JSON for the repository rule.
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            exec(compile(content, "setup.py", "exec"), globs)
     except _SetupCapture:
         pass  # Expected — setup() was called and we captured kwargs
     except BaseException:
