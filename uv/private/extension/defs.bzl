@@ -282,6 +282,7 @@ def _parse_projects(module_ctx, hub_specs):
             has_target = override.target != None
             has_modifications = (
                 override.testonly or
+                override.build_tool or
                 override.console_scripts != _CONSOLE_SCRIPTS_UNSET or
                 override.pre_build_patches or
                 override.post_install_patches or
@@ -299,7 +300,7 @@ def _parse_projects(module_ctx, hub_specs):
             if has_target and has_modifications:
                 fail("uv.override_package() for '{}': `target` is mutually exclusive with modification attributes.".format(override.name))
             if not has_target and not has_modifications:
-                fail("uv.override_package() for '{}': must specify either `target` for full replacement or at least one modification attribute (testonly, console_scripts, pre_build_patches, post_install_patches, exclude_glob, replacement_deps, extra_deps, extra_data, toolchains, env, monitor_memory, resource_set).".format(override.name))
+                fail("uv.override_package() for '{}': must specify either `target` for full replacement or at least one modification attribute (build_tool, testonly, console_scripts, pre_build_patches, post_install_patches, exclude_glob, replacement_deps, extra_deps, extra_data, toolchains, env, monitor_memory, resource_set).".format(override.name))
 
         unscoped_matches = {i: 0 for i, override in enumerate(mod.tags.override_package) if override.lock == None}
 
@@ -618,11 +619,12 @@ def _parse_projects(module_ctx, hub_specs):
                     # to defer choosing deps until the repo rule when we
                     # could do pyproject.toml introspection.
                     ann_key = (project_id, normalize_name(package["name"]), package["version"], "__base__")
-                    build_deps = lock_build_dep_anns.get(ann_key) or []
+                    build_tool = pkg_override.build_tool if pkg_override else None
+                    build_deps = [] if build_tool else lock_build_dep_anns.get(ann_key) or []
                     is_native = "auto"
                     if ann_key in lock_native_anns:
                         is_native = "true" if lock_native_anns[ann_key] else "false"
-                    if lock_build_deps == None:
+                    if not build_tool and lock_build_deps == None:
                         # For optional sdist fallbacks (sdist present but a
                         # wheel will be picked at install time), tolerate a
                         # lock that doesn't carry `default_build_dependencies`
@@ -640,7 +642,8 @@ def _parse_projects(module_ctx, hub_specs):
                             for it in extract_requirement_marker_pairs(project.lock, project_id, req, default_versions, package_versions, fail_if_missing = sbuild_required)
                         ]
 
-                    build_deps = sets.to_list(sets.make(build_deps + lock_build_deps))
+                    if not build_tool:
+                        build_deps = sets.to_list(sets.make(build_deps + lock_build_deps))
 
                     pre_build_patches = []
                     pre_build_patch_strip = 1
@@ -666,6 +669,7 @@ def _parse_projects(module_ctx, hub_specs):
                     sbuild_specs[sbuild_id] = struct(
                         src = sdist,
                         deps = ["@{0}//:{1}".format(*it) for it in build_deps],
+                        build_tool = build_tool,
                         is_native = is_native,
                         version = package["version"],
                         pre_build_patches = pre_build_patches,
@@ -947,6 +951,7 @@ def _uv_impl(module_ctx):
             "package_install": sbuild_cfg.package_install,
             "src": sbuild_cfg.src,
             "deps": sbuild_cfg.deps,
+            "build_tool": sbuild_cfg.build_tool,
             "is_native": sbuild_cfg.is_native,
             "version": sbuild_cfg.version,
         }
@@ -1092,6 +1097,12 @@ _override_package_tag = tag_class(
             mandatory = False,
             doc = "A target that replaces the installed package while retaining locked dependency edges. " +
                   "Mutually exclusive with all modification attributes.",
+        ),
+        "build_tool": attr.label(
+            doc = "Executable implementing the build_helper.py CLI, including --check-build-dependencies. " +
+                  "Replaces the generated frontend and its entire dependency environment; the tool owns " +
+                  "all build requirements and must inherit the selected Python version and ABI. " +
+                  "Declared requirements are validated before building. Applies only to source builds.",
         ),
         "console_scripts": attr.string_dict(
             default = _CONSOLE_SCRIPTS_UNSET,

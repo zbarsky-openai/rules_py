@@ -187,11 +187,12 @@ def _sdist_build_impl(repository_ctx):
         repository_ctx: The repository context.
     """
 
-    available_deps = json.decode(repository_ctx.read(repository_ctx.attr.available_deps_file))
+    build_tool = repository_ctx.attr.build_tool
+    available_deps = {} if build_tool else json.decode(repository_ctx.read(repository_ctx.attr.available_deps_file))
     build_deps = None
     packages = {}
     graph = {}
-    if repository_ctx.attr.build_deps_file:
+    if not build_tool and repository_ctx.attr.build_deps_file:
         if not repository_ctx.attr.package_install:
             fail("build_deps_file requires the package_install label of the package being built")
         build_deps = json.decode(repository_ctx.read(repository_ctx.attr.build_deps_file))
@@ -253,7 +254,7 @@ def _sdist_build_impl(repository_ctx):
         )
 
     # Resolve additional deps discovered by the configure tool
-    extra_dep_labels = _resolve_extra_deps(repository_ctx, inspection, available_deps)
+    extra_dep_labels = [] if build_tool else _resolve_extra_deps(repository_ctx, inspection, available_deps)
     omitted_from = sorted({
         normalize_name(name): True
         for name in inspection.get("extra_deps", [])
@@ -326,6 +327,26 @@ def _sdist_build_impl(repository_ctx):
         console_scripts_attr = "\n    console_scripts = {},".format(repr(inspection["console_scripts"]))
     config_settings_attr = _config_settings_attr(repository_ctx.attr.config_settings)
 
+    build_tool_content = ""
+    args_attr = ""
+    if build_tool:
+        args = ["--check-build-dependencies"]
+        if not is_native:
+            args.append("--validate-anyarch")
+        args_attr = "\n    args = {},".format(repr(args))
+    else:
+        build_tool = ":build_tool"
+        build_tool_content = """
+py_binary(
+    name = "build_tool",
+    main = "@aspect_rules_py//uv/private/pep517_whl/tools:build_helper.py",
+    srcs = ["@aspect_rules_py//uv/private/pep517_whl/tools:build_helper.py"],
+    deps = {deps},
+    include_console_scripts = True,
+    indexed_imports = False,
+)
+""".format(deps = repr(all_deps))
+
     # Leave args unset: the pure rule validates anyarch wheels by default,
     # while the native rule defaults to no validation.
     # Native-rule repos route the frontend through pep517_frontend, which
@@ -337,35 +358,28 @@ def _sdist_build_impl(repository_ctx):
     # cross transition).
     frontend_load = ""
     frontend_target = ""
-    tool = ":build_tool"
+    tool = str(build_tool)
     if is_native:
         frontend_load = "\nload(\"@aspect_rules_py//uv/private/pep517_whl:frontend.bzl\", \"pep517_frontend\")"
         frontend_target = """
 pep517_frontend(
     name = "frontend",
-    actual = ":build_tool",
+    actual = "{build_tool}",
 )
-"""
+""".format(build_tool = build_tool)
         tool = ":frontend"
 
     repository_ctx.file("BUILD.bazel", content = """
 load("@aspect_rules_py//uv/private/pep517_whl:{rule}.bzl", "{rule}"){frontend_load}
 load("@aspect_rules_py//py:defs.bzl", "py_binary")
 
-py_binary(
-    name = "build_tool",
-    main = "@aspect_rules_py//uv/private/pep517_whl/tools:build_helper.py",
-    srcs = ["@aspect_rules_py//uv/private/pep517_whl/tools:build_helper.py"],
-    deps = {deps},
-    include_console_scripts = True,
-    indexed_imports = False,
-)
+{build_tool_content}
 {frontend_target}
 {rule}(
     name = "whl",
     src = "{src}",
     tool = "{tool}",
-    version = "{version}",{console_scripts_attr}{config_settings_attr}{monitor_memory_attr}{resource_set_attr}{patch_attrs}{toolchain_attrs}
+    version = "{version}",{args_attr}{console_scripts_attr}{config_settings_attr}{monitor_memory_attr}{resource_set_attr}{patch_attrs}{toolchain_attrs}
     visibility = ["//visibility:public"],
 )
 
@@ -375,7 +389,8 @@ exports_files(
 )
 """.format(
         src = repository_ctx.attr.src,
-        deps = repr(all_deps),
+        build_tool_content = build_tool_content,
+        args_attr = args_attr,
         console_scripts_attr = console_scripts_attr,
         config_settings_attr = config_settings_attr,
         monitor_memory_attr = monitor_memory_attr,
@@ -399,6 +414,7 @@ sdist_build = repository_rule(
     attrs = {
         "src": attr.label(),
         "deps": attr.label_list(),
+        "build_tool": attr.label(doc = "Executable replacing the generated frontend; implements the build_helper.py CLI."),
         "available_deps_file": attr.label(
             mandatory = True,
             allow_single_file = [".json"],

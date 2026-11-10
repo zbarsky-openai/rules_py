@@ -1284,6 +1284,7 @@ PARSER.add_argument(
     help="PEP 517 config setting KEY=VALUE forwarded to the backend via `build -C` (repeatable)",
 )
 PARSER.add_argument("--validate-anyarch", action="store_true")
+PARSER.add_argument("--check-build-dependencies", action="store_true")
 PARSER.add_argument("--patch-strip", type=int, default=1, help="Strip count for patch (-p)")
 PARSER.add_argument("--patch", action="append", default=[], dest="patches", help="Patch file to apply (repeatable)")
 PARSER.add_argument("--execroot-marker", help="Token in env values to replace with the absolute execroot")
@@ -1346,6 +1347,39 @@ def main() -> None:
         target_cpu=opts.target_cpu,
     )
 
+    if opts.check_build_dependencies and "CARGO" in build_env:
+        # Keep Cargo isolated from the worker cache and use the declared C linker.
+        build_env["CARGO_HOME"] = path.join(tmp_root, "cargo-home")
+        makedirs(build_env["CARGO_HOME"], exist_ok=True)
+        build_env["RUSTFLAGS"] = build_env.get("RUSTFLAGS", "") + " -Clinker=" + shlex.split(build_env["CC"])[0]
+        cargo_lock = build_env.pop("ASPECT_RULES_PY_CARGO_LOCK", None)
+        if cargo_lock:
+            shutil.copyfile(cargo_lock, path.join(t, "Cargo.lock"))
+        vendor = build_env.pop("ASPECT_RULES_PY_CARGO_VENDOR", None)
+        if vendor:
+            # Maturin's metadata command does not forward --config. A local config
+            # supplies the same declared sources to metadata and compilation.
+            config = path.join(tmp_root, ".cargo", "config.toml")
+            makedirs(path.dirname(config), exist_ok=True)
+            with open(config, "w") as stream:
+                stream.write('[source.crates-io]\nreplace-with = "bazel-vendor"\n'
+                             '[source.bazel-vendor]\ndirectory = ' + json.dumps(vendor) + "\n")
+
+    if opts.check_build_dependencies:
+        from build import ProjectBuilder, check_dependency
+
+        # Validate static requirements before importing a possibly missing backend.
+        missing = {
+            unmet
+            for requirement in ProjectBuilder(t).build_system_requires
+            for unmet in check_dependency(requirement)
+        }
+        if missing:
+            print("Error: unsatisfied declared build requirements:", file=sys.stderr)
+            for dependency_chain in sorted(missing):
+                print("  " + " -> ".join(dependency_chain), file=sys.stderr)
+            raise SystemExit(1)
+
     if _legacy_metadata_conflicts_with_pyproject(t):
         print(
             "Warning: falling back to setup.py because pyproject.toml omits dynamic dependency metadata "
@@ -1385,9 +1419,10 @@ def main() -> None:
             "-m", "build",
             "--wheel",
             "--no-isolation",
-            "--skip-dependency-check",
             "--outdir", outdir,
         ]
+        if not opts.check_build_dependencies:
+            cmd.append("--skip-dependency-check")
         # `build -C` accumulates repeated keys into a list for the backend, so
         # package settings never collide with the -C the cross branch adds.
         for setting in opts.config_settings:
