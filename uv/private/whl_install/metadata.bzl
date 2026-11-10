@@ -573,7 +573,7 @@ def derive_layout(record_segments):
         native_roots = sorted(native_roots.keys()),
     )
 
-def extract_install_metadata(rctx, whl_path, basename):
+def extract_install_metadata(rctx, whl_path, basename, exclude_glob, carry_record_paths):
     """Peek inside a wheel and derive the layout `PyWheelsInfo` consumes.
 
     Reads:
@@ -588,6 +588,8 @@ def extract_install_metadata(rctx, whl_path, basename):
       whl_path: A resolved `rctx.path` to the wheel on disk.
       basename: The wheel's file name, which implies the `.dist-info` directory
         holding RECORD/entry_points.txt.
+      exclude_glob: Exclusions shared by every consumer of this wheel.
+      carry_record_paths: Whether conflicting consumers need unfiltered paths.
 
     Returns:
       A struct of sorted `list[str]` fields ready to pass straight through as
@@ -602,7 +604,12 @@ def extract_install_metadata(rctx, whl_path, basename):
     # the site-packages segments the layout derives from and the prefix data
     # paths venv assembly projects.
     parsed = parse_record(record, data_directory)
-    record_segments = parsed.record_segments
+    exclude_patterns = [parse_exclude_glob(pattern) for pattern in exclude_glob]
+    record_segments = [
+        segments
+        for segments in parsed.record_segments
+        if not exclude_patterns or not record_path_excluded(segments, exclude_patterns)
+    ]
 
     # entry_points.txt: INI-style file. Only `[console_scripts]` interests
     # us — pip/uv synthesize executables under `bin/<name>` from those at
@@ -632,8 +639,8 @@ def extract_install_metadata(rctx, whl_path, basename):
 
     # A wheel's RECORD always lists at least its `.dist-info`, so a prebuilt
     # wheel's top_levels is never empty (empty stays reserved for source-built
-    # wheels of unknown layout). `record_paths` is preserved so whl_install can
-    # re-derive the layout after applying exclude_glob.
+    # wheels of unknown layout). Only conflicting exclusion policies need the
+    # RECORD paths preserved for analysis-time layout derivation.
     layout = derive_layout(record_segments)
     return struct(
         top_levels = layout.top_levels,
@@ -644,6 +651,6 @@ def extract_install_metadata(rctx, whl_path, basename):
         regular_roots = layout.regular_roots,
         native_roots = layout.native_roots,
         console_scripts = sorted(console_scripts.values()),
-        record_paths = ["/".join(segments) for segments in record_segments],
+        record_paths = ["/".join(segments) for segments in record_segments] if carry_record_paths else [],
         data_files = parsed.data_files,
     )

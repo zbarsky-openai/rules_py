@@ -732,7 +732,7 @@ def _resolve_metadata_collisions(metadata_claimants, state, fully_covered, compl
         if winner in fully_covered:
             state.top_level_to_site_pkgs[tl] = winner
 
-def resolve_wheel_collisions(ctx, wheels, console_scripts):
+def resolve_wheel_collisions(ctx, wheels, console_scripts, wheel_by_sp = None, known_layout_site_pkgs = None):
     """Walk ``PyWheelsInfo.wheels`` and produce merge plans for site-packages + bin/.
 
     Policy-agnostic: collisions are recorded, not reported.  The caller
@@ -750,9 +750,11 @@ def resolve_wheel_collisions(ctx, wheels, console_scripts):
     tl_claimants = {}
     metadata_claimants = {}
     cs_claimants = {}
-    wheel_by_sp = {}
+    wheel_by_sp = {} if wheel_by_sp == None else wheel_by_sp
     for w in wheels:
         wheel_by_sp[w.site_packages_rfpath] = w
+        if known_layout_site_pkgs != None and w.top_levels:
+            known_layout_site_pkgs.add(w.site_packages_rfpath)
         for tl in w.metadata_top_levels:
             metadata_claimants.setdefault(tl, []).append(w.site_packages_rfpath)
         for tl, claim in w.tl_claims:
