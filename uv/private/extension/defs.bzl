@@ -61,7 +61,6 @@ load("//uv/private/constraints:repository.bzl", "configurations_hub")
 load("//uv/private/git_archive:repository.bzl", "git_archive")
 load("//uv/private/sdist_build:attrs.bzl", "validate_build_attrs")
 load("//uv/private/sdist_build:repository.bzl", "sdist_build")
-load("//uv/private/sdist_configure:defs.bzl", "DEFAULT_CONFIGURE_SCRIPT")
 load("//uv/private/tomltool:toml.bzl", "toml")
 load("//uv/private/uv_hub:repository.bzl", "uv_hub")
 load("//uv/private/uv_project:repository.bzl", "uv_project")
@@ -910,12 +909,6 @@ def _uv_impl(module_ctx):
     # Resolve the sdist configure tool. The default is our bundled
     # detect_native.py, run with a PBS interpreter for the host platform.
     default_configure_interpreter = resolve_host_interpreter_label(module_ctx)
-    default_configure_command = []
-    if default_configure_interpreter:
-        default_configure_command = [
-            "$(location {})".format(default_configure_interpreter),
-            "$(location {})".format(DEFAULT_CONFIGURE_SCRIPT),
-        ]
 
     for sbuild_id, sbuild_cfg in cfg.sbuild_cfgs.items():
         sbuild_kwargs = {
@@ -929,8 +922,8 @@ def _uv_impl(module_ctx):
             "version": sbuild_cfg.version,
         }
 
-        if default_configure_command:
-            sbuild_kwargs["configure_command"] = default_configure_command
+        if default_configure_interpreter:
+            sbuild_kwargs["configure_interpreter"] = default_configure_interpreter
 
         if sbuild_cfg.pre_build_patches:
             sbuild_kwargs["pre_build_patches"] = sbuild_cfg.pre_build_patches

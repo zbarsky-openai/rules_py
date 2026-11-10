@@ -8,6 +8,7 @@ appropriate backend-specific build rule (e.g. pep517_whl, maturin_whl).
 
 load("//uv/private:normalize_name.bzl", "normalize_name")
 load("//uv/private/extension:graph_utils.bzl", "exclude_build_dep", "reachable_build_deps")
+load("//uv/private/sdist_configure:defs.bzl", "DEFAULT_CONFIGURE_SCRIPT")
 load("//uv/private/uv_project:build_deps.bzl", "write_build_deps")
 load(":attrs.bzl", "validate_build_attrs")
 
@@ -37,6 +38,18 @@ def _run_configure_tool(repository_ctx, archive_path, available_deps):
     Returns a dict on success, or None on failure.
     """
     configure_command = repository_ctx.attr.configure_command
+    interpreter = repository_ctx.attr.configure_interpreter
+    if interpreter:
+        if configure_command:
+            fail("configure_interpreter and configure_command are mutually exclusive")
+        repository_ctx.read(interpreter.same_package_label("INTERPRETER_ARCHIVE"))
+        configure_command = [
+            "$(location {})".format(interpreter),
+            "-I",
+            "-S",
+            "-B",
+            "$(location {})".format(DEFAULT_CONFIGURE_SCRIPT),
+        ]
 
     if not configure_command:
         return None
@@ -116,6 +129,7 @@ def _resolve_archive_path(repository_ctx):
     for archive files.
     """
     src_path = repository_ctx.path(repository_ctx.attr.src)
+    repository_ctx.watch(src_path)
     if src_path.exists:
         return src_path
 
@@ -123,7 +137,7 @@ def _resolve_archive_path(repository_ctx):
     # Scan the parent directory for an archive file.
     parent = src_path.dirname
     if parent.exists:
-        for child in parent.readdir():
+        for child in sorted(parent.readdir(), key = str):
             name = child.basename
             if name in ("BUILD", "BUILD.bazel"):
                 continue
@@ -193,6 +207,8 @@ def _sdist_build_impl(repository_ctx):
     available_deps.update(without_self)
     is_native_override = repository_ctx.attr.is_native
     archive_path = _resolve_archive_path(repository_ctx)
+    if archive_path:
+        repository_ctx.watch(archive_path)
     inspection = _run_configure_tool(repository_ctx, archive_path, available_deps) if archive_path else None
 
     if is_native_override == "auto":
@@ -373,6 +389,11 @@ exports_files(
         toolchain_attrs = toolchain_attrs,
     ))
 
+    # setup.py can read undeclared host state. Custom tools and failed
+    # inspections retain their existing uncached behavior as well.
+    if repository_ctx.attr.configure_interpreter and inspection != None and inspection.get("has_setup_py") == False:
+        return repository_ctx.repo_metadata(reproducible = True)
+
 sdist_build = repository_rule(
     implementation = _sdist_build_impl,
     attrs = {
@@ -391,6 +412,9 @@ sdist_build = repository_rule(
             doc = "Exact install label of the package being built; required with build_deps_file.",
         ),
         "is_native": attr.string(default = "auto", values = ["auto", "true", "false"]),
+        "configure_interpreter": attr.label(
+            doc = "PBS interpreter for the bundled configure tool, including its INTERPRETER_ARCHIVE identity file.",
+        ),
         "configure_command": attr.string_list(
             default = [],
             doc = "Command to run as the sdist configure tool. Each element is " +

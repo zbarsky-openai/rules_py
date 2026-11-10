@@ -15,11 +15,13 @@ def _python_interpreter_impl(rctx):
     python_version = rctx.attr.python_version
     sha256 = rctx.attr.sha256
     strip_prefix = rctx.attr.strip_prefix
-    rctx.download_and_extract(
+    download = rctx.download_and_extract(
         url = [url],
         sha256 = sha256,
         stripPrefix = strip_prefix,
     )
+    # Repository tools need the stdlib identity too, not just the executable.
+    rctx.file("INTERPRETER_ARCHIVE", json.encode([download.sha256, strip_prefix]))
 
     # Determine the Python binary path
     is_macos = "apple-darwin" in platform
@@ -205,6 +207,8 @@ load("@aspect_rules_py//py/private/interpreter:runtime.bzl", "py_runtime_toolcha
 load("@rules_python//python/cc:py_cc_toolchain.bzl", "py_cc_toolchain")
 
 package(default_visibility = ["//visibility:public"])
+
+exports_files(["INTERPRETER_ARCHIVE"])
 
 # --- Optional interpreter features ---
 
