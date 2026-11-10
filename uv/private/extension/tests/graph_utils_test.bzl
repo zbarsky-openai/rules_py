@@ -1,5 +1,5 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//uv/private/extension:graph_utils.bzl", "activate_extras", "collect_build_deps", "collect_sccs", "exclude_build_dep", "reachable_build_deps")
+load("//uv/private/extension:graph_utils.bzl", "activate_extras", "collect_build_deps", "collect_sccs", "exclude_build_dep", "reachable_build_deps", "replace_dependencies")
 
 def _extras_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -219,6 +219,34 @@ def _collect_sccs_id_state_test_impl(ctx):
     # A genuine cycle is named by its member packages
     cycle_ids, _, _ = collect_sccs({pkg: {dep_a: {"": 1}}, dep_a: {pkg: {"": 1}}}, {})
     asserts.equals(env, "cycle__cowsay__requests", cycle_ids[pkg])
+
+    # Replacements preserve untouched edges and markers while remaining outside
+    # the lock SCC topology. Replacing a cycle edge can split that locked cycle.
+    replacement = "@@//fixture:replacement"
+    graph = {pkg: {dep_a: {"sys_platform == 'linux'": 1}, dep_b: {"": 1}}, dep_a: {pkg: {"": 1}}, dep_b: {}}
+    replaced = replace_dependencies(graph, {pkg: {"requests": replacement}})
+    asserts.equals(env, graph, replace_dependencies(graph, {}))
+    asserts.equals(env, {replacement: {"sys_platform == 'linux'": 1}, dep_b: {"": 1}}, replaced[pkg])
+    asserts.equals(env, {"sys_platform == 'linux'": 1}, graph[pkg][dep_a])
+    replaced_ids, _, replaced_deps = collect_sccs(replaced)
+    asserts.false(env, replacement in replaced_ids)
+    asserts.equals(env, ["cowsay__6_1", "requests__2_0", "urllib3__1_26"], sorted(replaced_ids.values()))
+    asserts.equals(env, {"sys_platform == 'linux'": 1}, replaced_deps[replaced_ids[pkg]][replacement])
+
+    # Runtime replacement follows extra activation, including its conditions.
+    extra = pkg[:3] + ("extra",)
+    graph = {pkg: {}, extra: {dep_a: {"sys_platform == 'linux'": 1}}, dep_a: {}}
+    activations = {pkg: {"with_extra": {extra: {"python_version >= '3.12'": 1}}}}
+    active = replace_dependencies(activate_extras(graph, activations, "with_extra"), {pkg: {"requests": replacement}})
+    inactive = replace_dependencies(activate_extras(graph, activations, "without_extra"), {pkg: {"requests": replacement}})
+    asserts.equals(env, {"(python_version >= '3.12') and (sys_platform == 'linux')": 1}, active[pkg][replacement])
+    asserts.equals(env, {}, inactive[pkg])
+
+    # Build entries retain conditions along paths through a locked cycle.
+    graph = {pkg: {dep_a: {"sys_platform == 'linux'": 1}}, dep_a: {pkg: {"": 1}, dep_b: {"python_version >= '3.12'": 1}}, dep_b: {}}
+    build_ids, _, build_deps = collect_build_deps(replace_dependencies(graph, {dep_a: {"urllib3": replacement}}))
+    asserts.equals(env, {"(python_version >= '3.12') and (sys_platform == 'linux')": 1}, build_deps[build_ids[pkg]][replacement])
+    asserts.equals(env, {"python_version >= '3.12'": 1}, build_deps[build_ids[dep_a]][replacement])
 
     return unittest.end(env)
 

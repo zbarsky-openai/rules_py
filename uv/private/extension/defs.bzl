@@ -67,7 +67,7 @@ load("//uv/private/uv_project:repository.bzl", "uv_project")
 load("//uv/private/whl_install:dist_repository.bzl", "whl_dist")
 load("//uv/private/whl_install:metadata.bzl", "parse_console_script")
 load("//uv/private/whl_install:repository.bzl", "whl_install")
-load(":graph_utils.bzl", "activate_extras", "collect_build_deps", "collect_sccs")
+load(":graph_utils.bzl", "activate_extras", "collect_build_deps", "collect_sccs", "replace_dependencies")
 load(":lockfile.bzl", "build_marker_graph", "collect_bdists", "collect_configurations", "collect_sdists", "normalize_deps", "url_basename")
 load(":projectfile.bzl", "collate_versions_by_name", "collect_activated_extras", "extract_requirement_marker_pairs")
 
@@ -184,17 +184,18 @@ def parse_declared_console_script(name, entry_point):
     parsed = parse_console_script("{}={}".format(name, entry_point))
     return parsed[1] if parsed != None else None
 
-def _merge_scc_dep_markers_by_surface_package(marked_deps):
+def _merge_scc_dep_markers(marked_deps):
     """Merge SCC dep markers, re-keyed from lock tuple to surface package name.
 
     SCC external deps are keyed by the fully versioned lock tuple, but the
     generated hub targets key on the surface package alias. Merging across all
     versions lets split dependencies (e.g. chdb -> pyarrow) preserve their full
-    platform coverage instead of overwriting each other.
+    platform coverage instead of overwriting each other. Absolute replacement
+    labels remain unchanged.
     """
     merged = {}
     for dep, markers in marked_deps.items():
-        merged.setdefault(dep[1], {}).update(markers)
+        merged.setdefault(dep if type(dep) == "string" else dep[1], {}).update(markers)
     return merged
 
 def _parse_hubs(module_ctx):
@@ -286,6 +287,7 @@ def _parse_projects(module_ctx, hub_specs):
                 override.post_install_patches or
                 override.exclude_glob or
                 not override.inherit_default_exclude_glob or
+                override.replacement_deps or
                 override.extra_deps or
                 override.extra_data or
                 override.toolchains or
@@ -295,9 +297,9 @@ def _parse_projects(module_ctx, hub_specs):
                 override.resource_set != "default"
             )
             if has_target and has_modifications:
-                fail("uv.override_package() for '{}': `target` is mutually exclusive with modification attributes. Use `target` for full replacement OR build, patch, and data attributes for modifications, not both.".format(override.name))
+                fail("uv.override_package() for '{}': `target` is mutually exclusive with modification attributes.".format(override.name))
             if not has_target and not has_modifications:
-                fail("uv.override_package() for '{}': must specify either `target` for full replacement or at least one modification attribute (testonly, console_scripts, pre_build_patches, post_install_patches, exclude_glob, extra_deps, extra_data, toolchains, env, monitor_memory, resource_set).".format(override.name))
+                fail("uv.override_package() for '{}': must specify either `target` for full replacement or at least one modification attribute (testonly, console_scripts, pre_build_patches, post_install_patches, exclude_glob, replacement_deps, extra_deps, extra_data, toolchains, env, monitor_memory, resource_set).".format(override.name))
 
         unscoped_matches = {i: 0 for i, override in enumerate(mod.tags.override_package) if override.lock == None}
 
@@ -362,6 +364,7 @@ def _parse_projects(module_ctx, hub_specs):
                                 lock_build_dep_anns[k] = deps
 
             package_overrides = {}
+            replacement_deps = {}
             package_console_scripts = {}
             testonly_packages = {}
             for i, override in enumerate(mod.tags.override_package):
@@ -419,6 +422,11 @@ def _parse_projects(module_ctx, hub_specs):
                     testonly_packages[name] = True
 
                 k = (project_id, normalize_name(override.name), v, "__base__")
+                if override.replacement_deps:
+                    replacements = {normalize_name(dep): str(label) for dep, label in override.replacement_deps.items()}
+                    if len(replacements) != len(override.replacement_deps):
+                        fail("uv.override_package() for '{}=={}' in lock '{}': replacement_deps names must be distinct after normalization.".format(override.name, v, project.lock))
+                    replacement_deps[k] = replacements
                 if has_target:
                     if module_ctx.getenv("RULES_PY_UV_VERBOSE", ""):
                         print("Overriding {}@{} in {} with {}".format(override.name, v, project_name, override.target))
@@ -427,6 +435,23 @@ def _parse_projects(module_ctx, hub_specs):
             lock_build_deps = None
 
             marker_graph = build_marker_graph(project_id, lock_data)
+            for package, replacements in replacement_deps.items():
+                # Validate against base and extra edges before a configuration
+                # can make a valid dependency inactive.
+                available = {
+                    dep[1]: True
+                    for parent, deps in marker_graph.items()
+                    if parent[:3] == package[:3]
+                    for dep in deps
+                }
+                missing = sorted([name for name in replacements if name not in available])
+                if missing:
+                    fail("uv.override_package() for '{}=={}' in lock '{}': replacement_deps names are not direct dependencies: {}".format(
+                        package[1],
+                        package[2],
+                        project.lock,
+                        missing,
+                    ))
 
             bd, bt = collect_bdists(lock_data)
             bdist_specs.update(bd)
@@ -454,6 +479,9 @@ def _parse_projects(module_ctx, hub_specs):
             scc_id_state = {}
             for cfg in configuration_names:
                 cfgd_marker_graph = activate_extras(marker_graph, activated_extras, cfg)
+
+                # Preserve locked activation and markers on replacement edges.
+                cfgd_marker_graph = replace_dependencies(cfgd_marker_graph, replacement_deps)
                 cfgd_dep_to_scc, cfgd_scc_graph, cfgd_scc_deps = collect_sccs(cfgd_marker_graph, scc_id_state)
 
                 # Aggregated across configurations; markers that vary per graph
@@ -486,7 +514,7 @@ def _parse_projects(module_ctx, hub_specs):
             scc_deps = {scc_id: deps for scc_id, deps in scc_deps.items() if scc_id in reachable_sccs}
             for scc_id, deps in scc_deps.items():
                 for dep in deps:
-                    if dep[1] not in marked_package_cfg_sccs:
+                    if type(dep) != "string" and dep[1] not in marked_package_cfg_sccs:
                         fail("SCC {} depends on package {} without a surface alias".format(scc_id, dep[1]))
 
             if testonly_packages:
@@ -496,7 +524,7 @@ def _parse_projects(module_ctx, hub_specs):
                         member_names = [member[1] for member in members]
                         if not (
                             any([name in testonly_packages for name in member_names]) or
-                            any([dep[1] in testonly_packages for dep in scc_deps.get(scc_id, {})])
+                            any([type(dep) != "string" and dep[1] in testonly_packages for dep in scc_deps.get(scc_id, {})])
                         ):
                             continue
                         for name in member_names:
@@ -700,7 +728,7 @@ def _parse_projects(module_ctx, hub_specs):
             # Keep this graph separate from the runtime aliases and Gazelle index.
             project_build_deps = None
             if project_has_sbuilds:
-                build_dep_to_scc, build_scc_graph, build_scc_deps = collect_build_deps(marker_graph)
+                build_dep_to_scc, build_scc_graph, build_scc_deps = collect_build_deps(replace_dependencies(marker_graph, replacement_deps))
                 build_packages = {
                     pkg_name: [
                         {
@@ -718,7 +746,8 @@ def _parse_projects(module_ctx, hub_specs):
                 marked_build_scc_graph = map_scc_installs(build_scc_graph, install_table)
                 for scc_id, deps in build_scc_deps.items():
                     for dep, markers in deps.items():
-                        marked_build_scc_graph[scc_id].setdefault("//private/build_deps/sccs:" + build_dep_to_scc[dep], {}).update(markers)
+                        target = dep if type(dep) == "string" else "//private/build_deps/sccs:" + build_dep_to_scc[dep]
+                        marked_build_scc_graph[scc_id].setdefault(target, {}).update(markers)
 
                 project_build_deps = {
                     "packages": build_packages,
@@ -736,7 +765,7 @@ def _parse_projects(module_ctx, hub_specs):
                 dep_to_scc = marked_package_cfg_sccs,
                 testonly_packages = testonly_packages,
                 scc_deps = {
-                    k: _merge_scc_dep_markers_by_surface_package(deps)
+                    k: _merge_scc_dep_markers(deps)
                     for k, deps in scc_deps.items()
                 },
                 scc_graph = {
@@ -1061,8 +1090,8 @@ _override_package_tag = tag_class(
         "version": attr.string(mandatory = False),
         "target": attr.label(
             mandatory = False,
-            doc = "Full replacement: a target that substitutes for the package entirely. " +
-                  "Mutually exclusive with all patch/data modification attributes.",
+            doc = "A target that replaces the installed package while retaining locked dependency edges. " +
+                  "Mutually exclusive with all modification attributes.",
         ),
         "console_scripts": attr.string_dict(
             default = _CONSOLE_SCRIPTS_UNSET,
@@ -1118,6 +1147,10 @@ _override_package_tag = tag_class(
             default = True,
             doc = "Apply project defaults before package-specific wheel exclusions.",
         ),
+        "replacement_deps": attr.string_keyed_label_dict(
+            default = {},
+            doc = "Map direct locked dependency names to Bazel labels in emitted runtime and build dependency graphs. Names are normalized and must occur in the original base or extra edges. Replaced edges retain their markers and extra activation; other locked edges, package activation, wheel metadata, and the package's own build requirements are unchanged. Direct wheel-install targets bypass dependency graphs. Bazel analysis checks cycles involving replacement labels.",
+        ),
         "extra_deps": attr.label_list(
             default = [],
             doc = "Additional deps to add to the package's py_library target.",
@@ -1129,9 +1162,11 @@ _override_package_tag = tag_class(
     },
     doc = """Override or modify a Python package resolved from a lockfile.
 
-Use `target` for full replacement, or use the patch/data attributes for surgical
-modifications. Omitting `lock` applies the override across all project locks
-declared by the same module. `target` is mutually exclusive with modifications.""",
+Use `target` to replace the installed package, or use modification attributes
+to change its installation or named dependency edges. Locked dependencies are
+otherwise inherited. Omitting `lock` applies the override across all project
+locks declared by the same module. `target` is mutually exclusive with
+modifications.""",
 )
 
 uv = module_extension(

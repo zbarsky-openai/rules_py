@@ -28,7 +28,8 @@ def collect_sccs(marker_graph, id_state = None):
 
     Args:
         marker_graph: The dependency marker_graph, as returned by `build_marker_graph`.
-        {pkg: {dep: {marker: 1}}}
+        {pkg: {dep: {marker: 1}}}. Dependencies may be lock tuples or absolute
+        Bazel-label strings; labels remain external to the SCC topology.
         id_state: dict carrying SCC id intern state. Pass the same dict for
         every configuration of one project: identical SCC content reuses one
         id (the caller aggregates by id), while an SCC with the same members
@@ -49,11 +50,12 @@ def collect_sccs(marker_graph, id_state = None):
     for pkg, deps in marker_graph.items():
         all_nodes.add(pkg)
         for dep in deps.keys():
-            all_nodes.add(dep)
+            if type(dep) != "string":
+                all_nodes.add(dep)
 
     simplified_graph = {node: [] for node in all_nodes}
     for pkg, deps in marker_graph.items():
-        simplified_graph[pkg] = list(deps.keys())
+        simplified_graph[pkg] = [dep for dep in deps if type(dep) != "string"]
 
     graph_components = sccs(simplified_graph)
 
@@ -82,7 +84,7 @@ def collect_sccs(marker_graph, id_state = None):
     for scc_members, raw_scc_deps, intra_deps in scc_info_list:
         # Intern the scc_id by full content: distinct (members, deps, markers)
         # content must map to distinct ids, identical content to one id.
-        content_key = repr(sorted(scc_members)) + ";" + repr(sorted(raw_scc_deps.items()))
+        content_key = repr(sorted(scc_members)) + ";" + repr(sorted(raw_scc_deps.items(), key = str))
         new_scc_id = interned_ids.get(content_key)
         if new_scc_id == None:
             new_scc_id = _derive_scc_id(scc_members, id_stems)
@@ -278,6 +280,23 @@ def reachable_build_deps(packages, scc_graph):
             break
         frontier = next_frontier
     return reachable
+
+def replace_dependencies(marker_graph, replacements):
+    """Replace named locked edges with absolute labels, retaining their markers.
+
+    replacements maps resolved base-package tuples to normalized dependency names
+    and labels. The caller validates names against the original locked graph.
+    """
+    if not replacements:
+        return marker_graph
+    result = {}
+    for package, deps in marker_graph.items():
+        targets = replacements.get(package[:3] + ("__base__",), {})
+        replaced = {}
+        for dep, markers in deps.items():
+            replaced.setdefault(targets.get(dep[1], dep), {}).update(markers)
+        result[package] = replaced
+    return result
 
 def combine_markers(lefts, rights):
     """

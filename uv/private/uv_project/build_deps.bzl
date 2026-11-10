@@ -30,9 +30,10 @@ def write_build_deps(repository_ctx, packages, scc_graph, marker_fn = None):
 load("@aspect_rules_py//py:defs.bzl", "py_library")
 """]
     for scc_id, members in scc_graph.items():
+        # Ordinals make private conditional aliases unique within each SCC.
         deps = [
-            conditional_dep(content, member, markers, "_maybe__{}__{}".format(scc_id, safe_name(member)), _marker, "//private/sccs:empty")
-            for member, markers in members.items()
+            conditional_dep(content, member, markers, "_maybe__{}__member_{}".format(scc_id, i), _marker, "//private/sccs:empty")
+            for i, (member, markers) in enumerate(members.items())
         ]
         content.append("""
 py_library(

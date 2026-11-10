@@ -7,7 +7,7 @@ def _project_impl(repository_ctx):
 
     Attrs:
         dep_to_scc:   {package: {cfg: {scc: {marker: 1}}}}
-        scc_deps:     {scc: {package: {marker: 1}}}
+        scc_deps:     {scc: {package or absolute label: {marker: 1}}}
         scc_graph:    {scc: {install: {marker: 1}}}
     """
 
@@ -181,24 +181,24 @@ exports_files(
 {}
 """.format(scc_id, indent(pprint(members), "# "), indent(pprint(this_scc_deps), "# ")))
 
-        for member, markers in members.items():
+        for i, (member, markers) in enumerate(members.items()):
             deps.append(conditional_dep(
                 content,
                 member,
                 markers,
-                "_maybe__{}__{}".format(scc_id, safe_name(member)),
+                "_maybe__{}__member_{}".format(scc_id, i),
                 _marker,
                 ":empty",
                 testonly = scc_id in testonly_sccs,
             ))
 
         # SCC deps are mapped back to surface packages
-        for dep, markers in this_scc_deps.items():
+        for i, (dep, markers) in enumerate(this_scc_deps.items()):
             deps.append(conditional_dep(
                 content,
-                "//:" + dep,
+                dep if dep.startswith("@") or dep.startswith("//") else "//:" + dep,
                 markers,
-                "_maybe__{}__{}".format(scc_id, safe_name(dep)),
+                "_maybe__{}__dep_{}".format(scc_id, i),
                 _marker,
                 ":empty",
                 testonly = scc_id in testonly_sccs,
