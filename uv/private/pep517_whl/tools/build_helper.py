@@ -125,6 +125,9 @@ if sysroot and not has_sysroot:
     sysroot_args = (["-isysroot", sysroot] if sys.platform == "darwin"
                     else ["--sysroot=" + sysroot])
     filtered_args = sysroot_args + filtered_args
+# Driver-level debug maps also cover Darwin and single-step compile-and-link
+# commands, including inputs hidden in response files.
+filtered_args = {debug_prefix_maps!r} + filtered_args
 mode = _compiler_mode(argument_flags)
 is_compile = mode == "compile"
 is_link = mode == "link"
@@ -220,6 +223,7 @@ def _make_compiler_wrapper(
     shared_link_flags: list[str] | None = None,
     exe_link_flags: list[str] | None = None,
     native_link_flags: list[str] | None = None,
+    debug_prefix_maps: list[str] | None = None,
 ) -> str:
     wrapper = path.join(tmpdir, ".aspect_rules_py_compilers", name)
     makedirs(path.dirname(wrapper), exist_ok=True)
@@ -233,6 +237,7 @@ def _make_compiler_wrapper(
             shared_link_flags=shared_link_flags or [],
             exe_link_flags=exe_link_flags or [],
             native_link_flags=native_link_flags or [],
+            debug_prefix_maps=debug_prefix_maps or [],
         ))
     chmod(wrapper, 0o755)
     return wrapper
@@ -705,9 +710,23 @@ def _compiler_env(
     target_cpu: str = "",
 ) -> dict[str, str]:
     env = dict(os.environ)
+    debug_prefix_maps = []
     if execroot_marker:
         execroot = os.getcwd()
         env = {key: value.replace(execroot_marker, execroot) for key, value in env.items()}
+        # Preserve debug information without embedding sandbox or interpreter
+        # repository paths. The last matching map wins, so put specific roots last.
+        prefixes = {
+            path.normpath(sys.base_exec_prefix): "python-base-exec-prefix",
+            path.normpath(sys.base_prefix): "python-base-prefix",
+            execroot: ".",
+        }
+        debug_prefix_maps = [
+            f"-fdebug-prefix-map={prefix}={replacement}"
+            for prefix, replacement in sorted(
+                prefixes.items(), key=lambda item: len(item[0])
+            )
+        ]
     # The helper's launcher exports RUNFILES_DIR, RUNFILES_MANIFEST_FILE, and
     # JAVA_RUNFILES:
     # https://github.com/hermeticbuild/hermetic-launcher/blob/381814d0818af0573263323dc0dd0e4e208fc3fa/README.md#runfiles-discovery
@@ -791,7 +810,7 @@ def _compiler_env(
             for key in ("CFLAGS", "CXXFLAGS"):
                 env[key] = (include_flag + " " + env.get(key, "")).strip()
 
-        wrapper_flags = _get_wrapper_flags(env.get("CFLAGS", ""))
+        wrapper_flags = _get_wrapper_flags(env.get("CFLAGS", "")) + debug_prefix_maps
         is_darwin_target = target_os == "darwin"
 
         # An LLVM-style toolchain (BCR `llvm` module) reaches its crt objects
@@ -826,11 +845,13 @@ def _compiler_env(
             tmpdir, "cc", cc_path, sysroot,
             json.loads(env.pop("ASPECT_RULES_PY_C_COMPILE_FLAGS", "[]")),
             shared_link_flags, exe_link_flags, native_link_flags,
+            debug_prefix_maps = debug_prefix_maps,
         )
         cxx = _make_compiler_wrapper(
             tmpdir, "c++", cxx_path, sysroot,
             json.loads(env.pop("ASPECT_RULES_PY_CXX_COMPILE_FLAGS", "[]")),
             shared_link_flags, exe_link_flags, native_link_flags,
+            debug_prefix_maps = debug_prefix_maps,
         )
 
     env.setdefault("CC", cc)
@@ -871,7 +892,7 @@ def _compiler_env(
     # a system mpicc exists, wrapped to keep the debug-flag stripping.
     mpicc_path = shutil.which("mpicc", path=env["PATH"])
     if mpicc_path:
-        env.setdefault("MPICC", _make_compiler_wrapper(tmpdir, "mpicc", mpicc_path, sysroot))
+        env.setdefault("MPICC", _make_compiler_wrapper(tmpdir, "mpicc", mpicc_path, sysroot, debug_prefix_maps = debug_prefix_maps))
     # $AR consumers (meson, distutils, CMake) all invoke it with ar-style
     # args, but the llvm toolchain's cpp_link_static_library tool on a darwin
     # exec host is llvm-libtool-darwin, which only accepts libtool-style

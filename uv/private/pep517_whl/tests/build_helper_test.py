@@ -844,6 +844,32 @@ class NativeDependencyResponseFilesTest(unittest.TestCase):
                                 self.assertFalse(any(arg.startswith("@") for arg in _run_wrapper(env[key], [flag, "extension.c"])))
 
 
+class CrossDebugPrefixMapsTest(unittest.TestCase):
+    def test_debug_maps_reach_both_cross_drivers(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            compiler = path.join(tmp, "echo_cc")
+            with open(compiler, "w") as stream:
+                stream.write('#!/bin/sh\nprintf \'%s\\n\' "$@"\n')
+            os.chmod(compiler, 0o755)
+            for target_os in ("linux", "darwin"):
+                with self.subTest(target_os=target_os), patch.dict(os.environ, {
+                    "PATH": os.environ["PATH"], "CC": compiler, "CXX": compiler,
+                }, clear=True), patch.object(sys, "base_prefix", "/interpreter"), patch.object(sys, "base_exec_prefix", "/interpreter/platform"):
+                    env = build_helper._compiler_env(tmp, execroot_marker="$(EXECROOT)", cross=True, target_os=target_os, target_cpu="aarch64")
+                for key in ("CC", "CXX"):
+                    for args in (["-g", "-c", "source.c"], ["-g", "source.c", "-shared"], ["@compile.rsp"]):
+                        with self.subTest(compiler=key, args=args):
+                            argv = _run_wrapper(env[key], args)
+                            self.assertIn("-fdebug-prefix-map=" + os.getcwd() + "=.", argv)
+                            base = "-fdebug-prefix-map=/interpreter=python-base-prefix"
+                            specific = "-fdebug-prefix-map=/interpreter/platform=python-base-exec-prefix"
+                            self.assertIn(base, argv)
+                            self.assertIn(specific, argv)
+                            self.assertLess(argv.index(base), argv.index(specific))
+
+
 class CompilerResponseFilesTest(unittest.TestCase):
     def test_nested_response_modes_preserve_argv_and_link_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
