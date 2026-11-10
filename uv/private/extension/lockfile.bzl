@@ -98,6 +98,9 @@ def normalize_lock(lock_id, lock_data):
         The unambiguous default versions, all package versions, and the graph
         from dependency tuples to their ordered edges and markers.
     """
+    if lock_data.get("conflicts"):
+        fail("Cannot import {}: rules_py does not support uv lock conflicts between dependency groups or extras.".format(lock_id))
+
     packages = lock_data.get("package", [])
     package_versions = {}
     for package in packages:
