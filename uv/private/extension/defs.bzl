@@ -267,8 +267,6 @@ def _parse_projects(module_ctx, hub_specs):
     for mod in module_ctx.modules:
         project_locks = {project.lock: True for project in mod.tags.project}
         for override in mod.tags.override_package:
-            if override.lock == None and override.target != None:
-                fail("uv.override_package() for '{}': `target` requires `lock`.".format(override.name))
             if override.lock != None and override.lock not in project_locks:
                 fail("uv.override_package() for '{}' refers to lock '{}', but module '{}' has no uv.project() for that lock.".format(
                     override.name,
@@ -341,7 +339,7 @@ def _parse_projects(module_ctx, hub_specs):
             lock_build_dep_anns = {}
             lock_native_anns = {}
             for ann in mod.tags.annotate_packages:
-                if ann.lock == project.lock:
+                if ann.lock == None or ann.lock == project.lock:
                     annotations = toml.decode_file(module_ctx, ann.src)
                     for package in annotations.get("package", []):
                         k = _resolve(package)
@@ -1045,22 +1043,22 @@ _project_tag = tag_class(
 _annotations_tag = tag_class(
     attrs = {
         "lock": attr.label(
-            mandatory = True,
-            doc = "The `uv.lock` these annotations apply to.",
+            mandatory = False,
+            doc = "The `uv.lock` these annotations apply to. Omit it to apply across every `uv.project()` in the same module.",
         ),
         "src": attr.label(
             mandatory = True,
             doc = "TOML file of per-package annotations (`[package]` tables carrying `native` and/or `build-dependencies`).",
         ),
     },
-    doc = """Attach per-package build annotations (native flag, extra build-dependencies) from a TOML file to a specific lock.""",
+    doc = """Attach per-package build annotations (native flag, extra build-dependencies) from a TOML file to one lock or all project locks in the same module.""",
 )
 
 _override_package_tag = tag_class(
     attrs = {
         "lock": attr.label(
             mandatory = False,
-            doc = "The `uv.lock` this override applies to. Omit it to apply modifications across every `uv.project()` declared by the same module.",
+            doc = "The `uv.lock` this override applies to. Omit it to apply the override across every `uv.project()` declared by the same module.",
         ),
         "name": attr.string(mandatory = True),
         "testonly": attr.bool(
@@ -1138,10 +1136,9 @@ _override_package_tag = tag_class(
     },
     doc = """Override or modify a Python package resolved from a lockfile.
 
-Use `target` for full replacement, or use the patch/data attributes
-for surgical modifications. Omitting `lock` applies modifications across all
-project locks declared by the same module. Specifying `target` requires `lock`
-and is mutually exclusive with all other modification attributes.""",
+Use `target` for full replacement, or use the patch/data attributes for surgical
+modifications. Omitting `lock` applies the override across all project locks
+declared by the same module. `target` is mutually exclusive with modifications.""",
 )
 
 uv = module_extension(
