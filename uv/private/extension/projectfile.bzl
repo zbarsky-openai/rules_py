@@ -184,7 +184,7 @@ def _add_minimal_clause(clauses, candidate):
     clauses[candidate] = 1
     return True
 
-def collect_activated_extras(projectfile, lock_id, project_data, lock_data, default_versions, graph, package_versions = {}):
+def collect_activated_extras(projectfile, lock_id, project_data, lock_data, default_versions, graph, package_versions = {}, native_targets = {}):
     """Collects the set of transitively activated extras for each configuration.
 
     This function determines the full set of extras that are activated for each
@@ -246,6 +246,15 @@ def collect_activated_extras(projectfile, lock_id, project_data, lock_data, defa
                 # We do this here so it's easy to handle marker expressions
                 clauses = reachable_clauses.setdefault(group_name, {}).setdefault(dep, {})
                 _add_minimal_clause(clauses, _marker_clause(marker))
+
+    # Native replacements do not need a matching wheel. Keep the locked dependency
+    # edges intact and expose only packages declared by an active runtime root.
+    runtime_group = project_data["project"]["name"]
+    runtime_roots = reachable_clauses.get(runtime_group, {})
+    project_root = default_versions.get(normalize_name(runtime_group))
+    for dep in native_targets:
+        if () in runtime_roots.get(project_root, {}) and dep in graph.get(project_root, {}):
+            runtime_roots[dep] = {(): 1}
 
     for group_name, group_clauses in reachable_clauses.items():
         worklist = [

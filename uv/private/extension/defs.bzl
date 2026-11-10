@@ -267,6 +267,11 @@ def _parse_projects(module_ctx, hub_specs):
     for mod in module_ctx.modules:
         project_locks = {project.lock: True for project in mod.tags.project}
         for override in mod.tags.override_package:
+            if override.lock != None and override.exclude_locks:
+                fail("uv.override_package() for '{}': lock and exclude_locks are mutually exclusive".format(override.name))
+            for excluded_lock in override.exclude_locks:
+                if excluded_lock not in project_locks:
+                    fail("uv.override_package() for '{}' excludes unregistered lock '{}'".format(override.name, excluded_lock))
             if override.lock != None and override.lock not in project_locks:
                 fail("uv.override_package() for '{}' refers to lock '{}', but module '{}' has no uv.project() for that lock.".format(
                     override.name,
@@ -368,7 +373,10 @@ def _parse_projects(module_ctx, hub_specs):
             replacement_deps = {}
             package_console_scripts = {}
             testonly_packages = {}
+            native_targets = {}
             for i, override in enumerate(mod.tags.override_package):
+                if project.lock in override.exclude_locks:
+                    continue
                 if override.lock != None and override.lock != project.lock:
                     continue
 
@@ -432,6 +440,8 @@ def _parse_projects(module_ctx, hub_specs):
                     if module_ctx.getenv("RULES_PY_UV_VERBOSE", ""):
                         print("Overriding {}@{} in {} with {}".format(override.name, v, project_name, override.target))
                     install_table[k] = str(override.target)
+                    if override.lock != None and len(available_versions) == 1:
+                        native_targets[k] = True
 
             lock_build_deps = None
 
@@ -464,7 +474,7 @@ def _parse_projects(module_ctx, hub_specs):
 
             whl_configurations.update(collect_configurations(lock_data))
 
-            configuration_names, activated_extras = collect_activated_extras(project.lock, project_id, project_data, lock_data, default_versions, marker_graph, package_versions)
+            configuration_names, activated_extras = collect_activated_extras(project.lock, project_id, project_data, lock_data, default_versions, marker_graph, package_versions, native_targets)
             version_activations = collate_versions_by_name(activated_extras)
 
             # SCC graph shapes:
@@ -1085,6 +1095,9 @@ _annotations_tag = tag_class(
 
 _override_package_tag = tag_class(
     attrs = {
+        "exclude_locks": attr.label_list(
+            doc = "Registered locks omitted from a module-wide override.",
+        ),
         "lock": attr.label(
             mandatory = False,
             doc = "The `uv.lock` this override applies to. Omit it to apply the override across every `uv.project()` declared by the same module.",
