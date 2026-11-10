@@ -58,7 +58,6 @@ _SDIST_SRCS = glob(
 mtree_spec(
     name = "sdist_mtree_raw",
     srcs = _SDIST_SRCS,
-    include_runfiles = False,
 )
 
 mtree_mutate(
