@@ -1,22 +1,25 @@
 """Providers to share information between targets in the graph."""
 
-PyWheelsInfo = provider(
+def _py_wheels_info_init(*, direct = (), transitive = depset()):
+    return {"direct": direct, "transitive": transitive}
+
+PyWheelsInfo, _raw_py_wheels_info = provider(
     doc = """Installed wheel records used by venv assembly and image layering.
 
-Each element of `wheels` describes one wheel in the transitive closure of a
-target. Every record carries the complete installed tree. Repository-inspected
-wheels also carry their site-packages layout and console scripts; source-built
+Each record describes one wheel in the transitive closure of a target.
+Every record carries the complete installed tree. Repository-inspected wheels also carry their site-packages layout and console scripts; source-built
 wheels may leave that analysis-time metadata empty.
 
 Venv rules project known layouts and generate console-script wrappers. Image
 rules use `install_tree` to retain each wheel as a package leaf independently
 of whether its metadata was available during analysis.
 """,
+    init = _py_wheels_info_init,
     fields = {
-        "wheels": """Depset of wheel records, one per wheel in the transitive closure. rules_py aggregates this field in
-postorder. Producers must use `default` or `postorder`, the orders Bazel permits
-in that aggregate. For collision classes that select one claimant, permissive
-handling gives the later distinct element in the flattened sequence precedence.
+        "transitive": "Depset of wheel records inherited from dependencies, in default or postorder order.",
+        "direct": """Records installed by this target. They freeze when its analysis completes;
+consumers use `wheels_depset` to combine them with the transitive records.
+Postorder gives inherited records precedence positions before direct records.
 Duplicate dependency edges do not create another precedence position. Fields:
   * `top_levels`: tuple[str] — complete set of immediate `site-packages`
     entry names when nonempty; an empty tuple means the layout is unknown.
@@ -50,6 +53,8 @@ Duplicate dependency edges do not create another precedence position. Fields:
     `sys.prefix`. Validated by `make_wheel_record`. May be absent on structs
     from older producers; consumers use `getattr` with `()`.
   * `install_tree`: File — complete installed wheel tree.
+  * `projection_records`: entry-name dictionary of `(entry, site_packages_rfpath)`
+    pairs shared by the import-index command lines of consuming venvs.
   * `tl_claims`, `metadata_top_levels`, `cs_claims`: derived fields
     precomputed by `make_wheel_record` so venv assembly's collision
     resolution does per-wheel parsing once instead of per consuming binary.
@@ -61,6 +66,12 @@ present and consistent with the raw ones.
 """,
     },
 )
+
+def wheels_depset(info):
+    """Collect records from a dependency's frozen PyWheelsInfo, preserving postorder."""
+    if not info.direct:
+        return info.transitive
+    return depset(direct = info.direct, transitive = [info.transitive], order = "postorder")
 
 _WheelRecord = provider(fields = [
     "top_levels",
@@ -77,6 +88,7 @@ _WheelRecord = provider(fields = [
     "tl_claims",
     "metadata_top_levels",
     "cs_claims",
+    "projection_records",
 ])
 
 _TopLevelClaim = provider(fields = [
@@ -154,7 +166,7 @@ def make_wheel_record(
             the wheel's complete prefix tree (see the PyWheelsInfo field docs).
 
     Returns:
-        A record for PyWheelsInfo.wheels.
+        A record for PyWheelsInfo.direct.
     """
     _validate_data_files(data_files, site_packages_rfpath, install_tree)
 
@@ -218,4 +230,9 @@ def make_wheel_record(
         tl_claims = tuple(tl_claims),
         metadata_top_levels = tuple(metadata_top_levels),
         cs_claims = tuple(cs_claims),
+        projection_records = {
+            entry: (entry, site_packages_rfpath)
+            for entries in (top_levels, namespace_entries, namespace_dirs, regular_roots)
+            for entry in entries
+        },
     )

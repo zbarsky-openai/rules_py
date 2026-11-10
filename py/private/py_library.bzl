@@ -7,7 +7,7 @@ without binding them to a particular version of that package.
 load("@bazel_skylib//lib:new_sets.bzl", "sets")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
-load("//py/private:providers.bzl", "PyWheelsInfo")
+load("//py/private:providers.bzl", "PyWheelsInfo", "wheels_depset")
 load("//py/private:pth.bzl", "make_imports_depset")
 load("//py/private:py_info.bzl", "PyInfo")
 load("//py/private:py_info_interop.bzl", "RulesPythonPyInfo", "get_py_info", "get_transitive_pyi_files", "get_transitive_sources", "has_py_info")
@@ -133,7 +133,7 @@ def _make_imports_depset(ctx, extra_imports_depsets = []):
     )
 
 def _make_wheels_depset(ctx):
-    """Collect PyWheelsInfo.wheels across deps + resolutions.
+    """Collect PyWheelsInfo across deps + resolutions.
 
     Used by downstream rules that want a flat list of wheels (with their
     declared top-level names) in the transitive closure, for building a
@@ -145,13 +145,13 @@ def _make_wheels_depset(ctx):
     https://bazel.build/rules/lib/builtins/depset#order
     """
     transitive = [
-        target[PyWheelsInfo].wheels
+        wheels_depset(target[PyWheelsInfo])
         for target in getattr(ctx.attr, "deps", [])
         if PyWheelsInfo in target
     ]
     for target in getattr(ctx.attr, "resolutions", {}).values():
         if PyWheelsInfo in target:
-            transitive.append(target[PyWheelsInfo].wheels)
+            transitive.append(wheels_depset(target[PyWheelsInfo]))
     return depset(order = "postorder", transitive = transitive)
 
 def _make_merged_runfiles(ctx, extra_depsets = [], extra_runfiles = [], extra_runfiles_depsets = []):
@@ -193,7 +193,7 @@ def _py_library_impl(ctx):
             virtual_resolutions = resolutions,
         ),
         PyWheelsInfo(
-            wheels = wheels,
+            transitive = wheels,
         ),
         instrumented_files_info,
     ]

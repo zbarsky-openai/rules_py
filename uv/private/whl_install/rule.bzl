@@ -317,7 +317,7 @@ def _whl_install(ctx):
         # (`install/`, internally `lib/python<M>.<m>/site-packages/...`);
         # venv assembly's per-top-level symlinks reference each wheel by
         # its natural runfiles path rather than through this File.
-        wheels = depset(direct = [make_wheel_record(
+        direct = [make_wheel_record(
             top_levels = top_levels,
             top_level_dirs = top_level_dirs,
             namespace_top_levels = namespace_top_levels,
@@ -331,7 +331,7 @@ def _whl_install(ctx):
             # patch alters the data set, so this list always matches the tree.
             data_files = data_files,
             install_tree = install_dir,
-        )]),
+        )],
     ))
 
     return providers

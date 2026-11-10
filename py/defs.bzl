@@ -25,7 +25,7 @@ load(
     _PyLayerCompressorInfo = "PyLayerCompressorInfo",
     _py_layer_compressor = "py_layer_compressor",
 )
-load("//py/private:providers.bzl", _PyWheelsInfo = "PyWheelsInfo")
+load("//py/private:providers.bzl", _PyWheelsInfo = "PyWheelsInfo", _wheels_depset = "wheels_depset")
 load(
     "//py/private:py_image_layer.bzl",
     _PyLayerTierInfo = "PyLayerTierInfo",
@@ -76,6 +76,7 @@ PyLayerCompressorInfo = _PyLayerCompressorInfo
 # The PyInfo provider used by rules_py
 PyInfo = _PyInfo
 PyWheelsInfo = _PyWheelsInfo
+wheels_depset = _wheels_depset
 
 # The runtime provider carried by rules_py-provisioned interpreter toolchains:
 # rules_python's public PyRuntimeInfo, the shared standard-toolchain contract.

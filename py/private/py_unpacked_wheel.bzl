@@ -90,7 +90,7 @@ def _py_unpacked_wheel_impl(ctx):
     ]
 
     providers.append(PyWheelsInfo(
-        wheels = depset(direct = [make_wheel_record(
+        direct = [make_wheel_record(
             top_levels = ctx.attr.top_levels,
             namespace_top_levels = ctx.attr.namespace_top_levels,
             namespace_entries = ctx.attr.namespace_entries,
@@ -99,7 +99,7 @@ def _py_unpacked_wheel_impl(ctx):
             data_files = ctx.attr.data_files,
             # See whl_install rule for the rationale.
             install_tree = unpack_directory,
-        )]),
+        )],
     ))
 
     return providers

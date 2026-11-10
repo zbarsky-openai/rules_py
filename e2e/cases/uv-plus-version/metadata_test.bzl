@@ -1,6 +1,6 @@
 """Analysis test for wheel metadata across equivalent URL spellings."""
 
-load("@aspect_rules_py//py/private:providers.bzl", "PyWheelsInfo")
+load("@aspect_rules_py//py/private:providers.bzl", "PyWheelsInfo", "wheels_depset")
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 
 _PYTHON_VERSION_FLAG = str(Label("@aspect_rules_py//py/private/interpreter:python_version"))
@@ -11,7 +11,7 @@ def _wheel_metadata_test_impl(ctx):
     target = analysistest.target_under_test(env)
     asserts.true(env, PyWheelsInfo in target)
     if PyWheelsInfo in target:
-        wheels = target[PyWheelsInfo].wheels.to_list()
+        wheels = wheels_depset(target[PyWheelsInfo]).to_list()
         asserts.equals(env, 1, len(wheels))
         if wheels:
             asserts.true(env, "jaxlib" in wheels[0].top_levels)

@@ -1,6 +1,6 @@
 """Wheel collision and namespace merge resolution for venv site-packages.
 
-Walks PyWheelsInfo.wheels and produces merge plans that the venv
+Walks PyWheelsInfo and produces merge plans that the venv
 assembler turns into per-entry symlinks, physical merges, and
 console-script wrappers.
 

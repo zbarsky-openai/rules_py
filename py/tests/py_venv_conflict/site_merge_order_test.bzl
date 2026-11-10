@@ -126,7 +126,7 @@ printf 'VALUE = %s\n' "$4" > "$site/other/from_final.py"
             virtual_dependencies = depset(),
             virtual_resolutions = depset(),
         ),
-        PyWheelsInfo(wheels = depset(direct = wheels, order = "postorder")),
+        PyWheelsInfo(direct = wheels),
     ]
 
 _wheel_set = rule(
@@ -236,7 +236,7 @@ printf 'VALUE = %s\n' "$4" > "$site/mixed/sibling.py"
             virtual_dependencies = depset(),
             virtual_resolutions = depset(),
         ),
-        PyWheelsInfo(wheels = depset(direct = wheels, order = "postorder")),
+        PyWheelsInfo(direct = wheels),
     ]
 
 _native_nested_wheel_set = rule(

@@ -2,7 +2,7 @@
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("//py/private:providers.bzl", "PyWheelsInfo")
+load("//py/private:providers.bzl", "PyWheelsInfo", "wheels_depset")
 load("//py/tools/unpack:exclude_glob_test_vectors.bzl", "CACHE_SOURCE_VECTORS", "EXCLUDE_GLOB_VECTORS", "RECORD_PATH_EXCLUDE_VECTORS")
 load("//uv/private:source_built_wheel.bzl", "SourceBuiltWheelInfo")
 load("//uv/private/whl_install:metadata.bzl", "cache_source_path", "canonical_version", "data_directory_for", "data_scheme_segments", "data_segments_contained", "exclude_glob_matches", "metadata_directory_hint", "native_roots_for_segments", "parse_console_script", "parse_exclude_glob", "parse_record", "parse_record_path", "record_path_excluded", "site_packages_segments")
@@ -601,7 +601,7 @@ def _metadata_selection_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
 
-    wheels = target[PyWheelsInfo].wheels.to_list()
+    wheels = wheels_depset(target[PyWheelsInfo]).to_list()
     asserts.equals(env, 1, len(wheels), "expected exactly one wheel struct in PyWheelsInfo")
 
     wheel = wheels[0]

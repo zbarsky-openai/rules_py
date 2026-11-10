@@ -7,12 +7,12 @@ legacy `name = module:func [extra]` syntax, so a regression that lets the
 `[extra]` suffix leak back into the value fails here.
 """
 
-load("@aspect_rules_py//py:defs.bzl", "PyWheelsInfo")
+load("@aspect_rules_py//py:defs.bzl", "PyWheelsInfo", "wheels_depset")
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 
 def _forward_wheels_impl(ctx):
-    return [PyWheelsInfo(wheels = depset(order = "postorder", transitive = [
-        dep[PyWheelsInfo].wheels
+    return [PyWheelsInfo(transitive = depset(order = "postorder", transitive = [
+        wheels_depset(dep[PyWheelsInfo])
         for dep in ctx.attr.deps
     ]))]
 
@@ -26,7 +26,7 @@ def _console_scripts_metadata_test_impl(ctx):
     target = analysistest.target_under_test(env)
     asserts.true(env, PyWheelsInfo in target)
     if PyWheelsInfo in target:
-        wheels = target[PyWheelsInfo].wheels.to_list()
+        wheels = wheels_depset(target[PyWheelsInfo]).to_list()
         asserts.equals(env, 1, len(wheels))
         if wheels:
             asserts.equals(

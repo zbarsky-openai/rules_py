@@ -442,7 +442,10 @@ def assemble_venv(
             indexed_runfiles.root_symlinks,
             map_each = _root_symlink_record,
         )
-        records.add_all(wheel_projections.items(), map_each = _wheel_projection_record)
+        records.add_all([
+            wheel_by_site_packages[site_packages].projection_records[entry]
+            for entry, site_packages in wheel_projections.items()
+        ], map_each = _wheel_projection_record)
 
         arguments = ctx.actions.args()
         arguments.add(ctx.file._import_index_generator)

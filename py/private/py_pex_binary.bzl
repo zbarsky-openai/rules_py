@@ -20,7 +20,7 @@ py_pex_binary(
 
 load("@bazel_lib//lib:paths.bzl", "to_rlocation_path")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load("//py/private:providers.bzl", "PyWheelsInfo")
+load("//py/private:providers.bzl", "PyWheelsInfo", "wheels_depset")
 load("//py/private:py_info.bzl", "PyInfo")
 load("//py/private/py_venv:types.bzl", "PY_VENV_KINDS", "VirtualenvInfo", "venv_root")
 load("//py/private/py_venv:virtuals_resolvers.bzl", "VENV_OWNED_ROOTS")
@@ -50,7 +50,7 @@ def _repo_root_prefix(short_path):
 _PexClosureInfo = provider(
     doc = "Private: wheels, venv roots, interpreter repo roots, and interpreter version aggregated across a binary's closure by _closure_aspect.",
     fields = {
-        "wheels": "depset of wheel record structs (see PyWheelsInfo.wheels).",
+        "wheels": "depset of wheel record structs (see PyWheelsInfo).",
         "venv_roots": "depset[str] — runfiles-relative roots of every sibling py_venv in the closure.",
         "interpreter_roots": "depset[str] — runfiles-relative repo roots (`../<repo>/`) of every py_venv toolchain's hermetic interpreter in the closure.",
         "version": "struct(major, minor, micro) | None — the binary's own interpreter version; propagated only along the `venv`/`actual` edge, so it is the version the PEX is built for.",
@@ -115,7 +115,7 @@ def _closure_aspect_impl(target, ctx):
     # already aggregates its subtree's wheels, so one hop suffices.
     for dep in _label_targets(getattr(ctx.rule.attr, "srcs", None)):
         if PyWheelsInfo in dep:
-            wheels.append(dep[PyWheelsInfo].wheels)
+            wheels.append(wheels_depset(dep[PyWheelsInfo]))
 
     # py_venv_exec (what the py_binary macro expands to) routes srcs/deps onto a
     # sibling py_venv reached via `venv`; that venv also carries VirtualenvInfo.
@@ -146,7 +146,7 @@ def _closure_aspect_impl(target, ctx):
     # aggregates deps + `resolutions`, which is the only path by which
     # resolution-only wheels (the aspect doesn't walk that edge) reach here.
     if PyWheelsInfo in target:
-        wheels.append(target[PyWheelsInfo].wheels)
+        wheels.append(wheels_depset(target[PyWheelsInfo]))
 
     if ctx.rule.kind in PY_VENV_KINDS and PY_TOOLCHAIN in ctx.rule.toolchains:
         py_tc = ctx.rule.toolchains[PY_TOOLCHAIN]

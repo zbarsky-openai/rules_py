@@ -73,7 +73,7 @@ printf 'VALUE = "namespace"\n' > "$site/mixed_top/from_namespace.py"
             virtual_dependencies = depset(),
             virtual_resolutions = depset(),
         ),
-        PyWheelsInfo(wheels = depset([wheel])),
+        PyWheelsInfo(direct = [wheel]),
     ]
 
 _mixed_wheel = rule(
@@ -206,7 +206,7 @@ printf 'native' > "$site/collision_order/native_extension.so"
             virtual_dependencies = depset(),
             virtual_resolutions = depset(),
         ),
-        PyWheelsInfo(wheels = depset([wheel])),
+        PyWheelsInfo(direct = [wheel]),
     ]
 
 _wheel = rule(
