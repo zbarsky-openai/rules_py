@@ -230,7 +230,8 @@ def _parse_projects(module_ctx, declared_hubs):
     # FIXME: Collect build deps files/annotations
     for mod in module_ctx.modules:
         project_locks = {project.lock: True for project in mod.tags.project}
-        for override in mod.tags.override_package:
+        file_only_overrides = {}
+        for i, override in enumerate(mod.tags.override_package):
             if override.lock != None and override.exclude_locks:
                 fail("uv.override_package() for '{}': lock and exclude_locks are mutually exclusive".format(override.name))
             for excluded_lock in override.exclude_locks:
@@ -249,14 +250,12 @@ def _parse_projects(module_ctx, declared_hubs):
                 fail("uv.override_package() for '{}': `post_install_patch_strip` requires `post_install_patches`.".format(override.name))
 
             has_target = override.target != None
-            has_modifications = (
+            has_other_modifications = (
                 override.testonly or
                 override.build_tool or
                 override.console_scripts != _CONSOLE_SCRIPTS_UNSET or
                 override.pre_build_patches or
                 override.post_install_patches or
-                override.exclude_glob or
-                not override.inherit_default_exclude_glob or
                 override.replacement_deps or
                 override.extra_deps or
                 override.extra_data or
@@ -266,6 +265,10 @@ def _parse_projects(module_ctx, declared_hubs):
                 override.monitor_memory or
                 override.resource_set != "default"
             )
+            has_file_filter = override.exclude_glob or not override.inherit_default_exclude_glob
+            if has_file_filter and not has_other_modifications:
+                file_only_overrides[i] = True
+            has_modifications = has_file_filter or has_other_modifications
             if has_target and has_modifications:
                 fail("uv.override_package() for '{}': `target` is mutually exclusive with modification attributes.".format(override.name))
             if not has_target and not has_modifications:
@@ -342,33 +345,38 @@ def _parse_projects(module_ctx, declared_hubs):
 
                 name = normalize_name(override.name)
                 available_versions = package_versions.get(name, {})
-                if override.lock == None and not available_versions:
-                    continue
-
-                v = override.version or default_versions.get(name, (None, None, None, None))[2]
-                if not v:
-                    fail("Overridden project {} neither specifies a version nor has an implied singular version in lock {}!".format(override.name, project.lock))
-                if v not in available_versions:
-                    if override.lock == None:
+                versions = available_versions.keys()
+                if override.version:
+                    versions = [override.version] if override.version in available_versions else []
+                elif len(versions) > 1 and i not in file_only_overrides:
+                    versions = []
+                if not versions:
+                    if override.lock == None and (not available_versions or override.version):
                         continue
-                    fail("uv.override_package() for package '{}' selects version '{}', which is absent from lock '{}'; available versions: {}".format(
-                        override.name,
-                        v,
-                        project.lock,
-                        sorted(available_versions.keys()),
-                    ))
+                    if override.version:
+                        fail("uv.override_package() for package '{}' selects version '{}', which is absent from lock '{}'; available versions: {}".format(
+                            override.name,
+                            override.version,
+                            project.lock,
+                            sorted(available_versions.keys()),
+                        ))
+                    fail("Overridden project {} neither specifies a version nor has an implied singular version in lock {}!".format(override.name, project.lock))
 
-                override_key = (name, v)
-                if override_key in package_overrides:
-                    fail("Duplicate uv.override_package() for package '{}' version '{}' in lock '{}'. Each (lock, name, version) triple may only be overridden once.".format(
-                        override.name,
-                        v,
-                        project.lock,
-                    ))
-
+                for version in versions:
+                    override_key = (name, version)
+                    if override_key in package_overrides:
+                        fail("Duplicate uv.override_package() for package '{}' version '{}' in lock '{}'. Each (lock, name, version) triple may only be overridden once.".format(
+                            override.name,
+                            version,
+                            project.lock,
+                        ))
+                    package_overrides[override_key] = override
                 if override.lock == None:
                     unscoped_matches[i] = True
 
+            for override_key, override in package_overrides.items():
+                name, v = override_key
+                available_versions = package_versions[name]
                 if override.console_scripts != _CONSOLE_SCRIPTS_UNSET:
                     console_scripts = []
                     for raw_script_name, raw_entry_point in sorted(override.console_scripts.items()):
@@ -384,7 +392,6 @@ def _parse_projects(module_ctx, declared_hubs):
                         console_scripts.append(console_script)
                     package_console_scripts[override_key] = console_scripts
 
-                package_overrides[override_key] = override
                 if override.testonly:
                     testonly_packages[name] = True
 
@@ -1005,7 +1012,9 @@ _override_package_tag = tag_class(
             default = False,
             doc = "Restrict this package and its generated Bazel targets to test-only consumers.",
         ),
-        "version": attr.string(mandatory = False),
+        "version": attr.string(
+            doc = "Select a locked version. With only wheel file exclusions, omit the version to apply them to all locked releases.",
+        ),
         "target": attr.label(
             mandatory = False,
             doc = "A target that replaces the installed package while retaining locked dependency edges. " +
