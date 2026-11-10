@@ -7,10 +7,12 @@ guard — before it, importing the module ran the build.
 """
 
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from os import makedirs, path
+from unittest import mock
 
 from uv.private.pep517_whl.tools import build_helper
 
@@ -21,6 +23,30 @@ def _make_executable(directory: str, name: str) -> str:
         f.write("#!/bin/sh\n")
     os.chmod(exe, 0o755)
     return exe
+
+
+class CompilerInterpreterTest(unittest.TestCase):
+    def test_wrappers_use_frontend_interpreter_instead_of_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            foreign_python = _make_executable(tmp, "python3")
+            with open(foreign_python, "a") as f:
+                f.write("exit 42\n")
+            compiler = _make_executable(tmp, "compiler")
+            interpreter = path.join(tmp, "python with spaces")
+            os.symlink(sys.executable, interpreter)
+            with mock.patch.object(build_helper.sys, "executable", interpreter):
+                wrappers = [
+                    build_helper._make_compiler_wrapper(tmp, "native", compiler),
+                    build_helper._make_cross_compiler_wrapper(tmp, "cross", compiler, []),
+                ]
+            env = dict(os.environ, PATH=tmp + os.pathsep + os.defpath)
+            for wrapper in wrappers:
+                with self.subTest(wrapper=wrapper):
+                    result = subprocess.run(
+                        [wrapper, "-c", "input.c"], env=env,
+                        capture_output=True, text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class ImportSafetyTest(unittest.TestCase):

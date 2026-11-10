@@ -105,7 +105,7 @@ def _response_args(args, active=()):
 
 
 _DEBUG_FLAG = "-fdebug-default-version=4"
-_COMPILER_WRAPPER = """#!/usr/bin/env python3
+_COMPILER_WRAPPER = """{python_launcher}
 import os
 import sys
 
@@ -214,6 +214,12 @@ def _local_cxx_companion(current: str | None, compiler_path: str) -> str:
     return compiler_path
 
 
+def _python_launcher() -> str:
+    # Match the PEP 517 frontend's interpreter instead of finding a different
+    # python3 adapter on PATH. The shell/Python preamble handles spaces in paths.
+    return f"#!/bin/sh\n'''exec' {shlex.quote(sys.executable)} \"$0\" \"$@\"\n' '''"
+
+
 def _make_compiler_wrapper(
     tmpdir: str,
     name: str,
@@ -229,6 +235,7 @@ def _make_compiler_wrapper(
     makedirs(path.dirname(wrapper), exist_ok=True)
     with open(wrapper, "w") as f:
         f.write(_COMPILER_WRAPPER.format(
+            python_launcher=_python_launcher(),
             wrapper_helpers=_COMPILER_WRAPPER_HELPERS,
             debug_flag=_DEBUG_FLAG,
             compiler_path=compiler_path,
@@ -423,7 +430,7 @@ _DROP_LINKER_PREFIXES = (
     "-mmacosx-version-min",
 )
 
-_CROSS_COMPILER_WRAPPER = """#!/usr/bin/env python3
+_CROSS_COMPILER_WRAPPER = """{python_launcher}
 import os
 import sys
 
@@ -526,6 +533,7 @@ def _make_cross_compiler_wrapper(
     return _write_generated_file(
         wrapper,
         _CROSS_COMPILER_WRAPPER.format(
+            python_launcher=_python_launcher(),
             wrapper_helpers=_COMPILER_WRAPPER_HELPERS,
             compiler_path=compiler_path,
             wrapper_flags=wrapper_flags,
