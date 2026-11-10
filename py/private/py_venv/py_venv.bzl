@@ -263,6 +263,10 @@ def _assemble_venv_target(ctx, executable, console_scripts):
             extra_depsets = [srcs_depset] + virtual_resolution.runfiles,
         )
 
+    typecheck_layout = None
+    if ctx.attr.typecheck_imports:
+        typecheck_layout = "literal" if not executable and not ctx.attr.indexed_imports else "physical"
+
     assembled = assemble_venv(
         ctx,
         venv_stem = venv_stem,
@@ -277,6 +281,7 @@ def _assemble_venv_target(ctx, executable, console_scripts):
         default_env = default_env,
         venv_activate_tmpl = ctx.file._venv_activate_tmpl if executable else None,
         indexed_runfiles = indexed_runfiles,
+        typecheck_layout = typecheck_layout,
         site_merge_script_py = ctx.file._site_merge_script,
         console_script_tmpl = ctx.file._console_script_tmpl if console_scripts else None,
         venv_name = ".{}".format(venv_stem),
@@ -434,6 +439,10 @@ does not reinsert a wheel.
         default = True,
         doc = "Whether private virtual environments may use indexed imports.",
     ),
+    "typecheck_imports": attr.bool(
+        default = False,
+        doc = "Emit the wheel-path contract for filesystem-based typecheckers.",
+    ),
     # Required for py_version attribute
     "_allowlist_function_transition": attr.label(
         default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
@@ -589,6 +598,7 @@ _VENV_ONLY_ATTRS = [
     "package_collisions",
     "include_system_site_packages",
     "indexed_imports",
+    "typecheck_imports",
     "precompile_first_party",
     "python_version",
     "dep_group",
@@ -663,6 +673,7 @@ def py_binary_with_venv(py_rule, name, main, srcs = [], deps = [], data = [], im
         venv_kwargs["freethreaded"] = freethreaded
     if tags and "typecheck" in tags:
         venv_kwargs.setdefault("indexed_imports", False)
+        venv_kwargs["typecheck_imports"] = True
     venv_kwargs["srcs"] = srcs
     venv_kwargs["deps"] = deps
     venv_kwargs["imports"] = imports

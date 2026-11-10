@@ -66,6 +66,7 @@ _ADDSITEDIR_LINE = (
 
 _IMPORTABLE_EXTENSIONS = ("py", "pyc", "so", "pyd")
 _INDEX_BOOTSTRAP_PTH = "!_aspect_rules_py_import_index.pth"
+_WHEEL_PATHS_PTH = "!_aspect_rules_py_wheel_paths.pth"
 
 def _dict_to_exports(env):
     return ["export %s=\"%s\"" % (k, v) for (k, v) in env.items()]
@@ -106,8 +107,10 @@ def _root_symlink_record(symlink):
 def _wheel_projection_record(projection):
     return "W\t" + projection[0] + "\t" + projection[1]
 
-def _indexed_projection_plan(wheels, wheel_by_site_packages, fully_covered, projections, known_layout_site_pkgs, ordered_metadata = False):
+def _indexed_projection_plan(wheels, wheel_by_site_packages, fully_covered, projections, known_layout_site_pkgs, ordered_metadata = False, literal_paths = False):
     """Select safe projections and retain existing collision/.pth semantics."""
+
+    bootstrap_pth = _WHEEL_PATHS_PTH if literal_paths else _INDEX_BOOTSTRAP_PTH
 
     # None marks a name shadowed by fallback wheels or incompatible spellings.
     import_spellings = {}
@@ -125,13 +128,16 @@ def _indexed_projection_plan(wheels, wheel_by_site_packages, fully_covered, proj
         )
         if name == None:
             if spelling.endswith(".pth"):
-                if entry == spelling and entry <= _INDEX_BOOTSTRAP_PTH:
-                    # This file could execute before the import index is installed.
+                if entry == spelling and entry <= bootstrap_pth:
+                    # This file could execute before the projected imports are available.
                     return projections, None
                 projected_pth_sites.add(site_packages)
             continue
         candidate_entries[entry] = name
-        if import_spellings.setdefault(name, spelling) != spelling:
+        if literal_paths and name in wheel.namespace_top_levels:
+            # Pyright does not merge namespace portions across wheel search roots.
+            import_spellings[name] = None
+        elif import_spellings.setdefault(name, spelling) != spelling:
             # A package, source file, or native extension with the same import
             # name must keep FileFinder's original single-directory precedence.
             import_spellings[name] = None
@@ -187,7 +193,8 @@ def assemble_venv(
         site_merge_script_py,
         console_script_tmpl,
         venv_name,
-        indexed_runfiles = None):
+        indexed_runfiles = None,
+        typecheck_layout = None):
     """Declare every file + symlink that makes up a venv for a target.
 
     Args:
@@ -218,6 +225,8 @@ def assemble_venv(
         (usually `ctx.file._console_script_tmpl`); `None` skips wrappers.
       venv_name: str — the venv dir basename (e.g. "." + venv_stem).
       indexed_runfiles: Optional runfiles whose paths seed indexed imports.
+      typecheck_layout: None, "physical", or "literal". Typecheck layouts emit
+        a literal wheel-path file; physical layouts leave it empty.
 
     Returns:
       struct with:
@@ -258,6 +267,21 @@ def assemble_venv(
 
     declared = []  # accumulator for all outputs
     wheel_projections = None
+    literal_wheel_sites = []
+    if typecheck_layout == "literal" and venv_stem + ".pth" > _WHEEL_PATHS_PTH:
+        # Physical wheel entries precede paths from every .pth file. Keep that
+        # priority over the generated first-party/fallback path file as well.
+        top_level_to_site_pkgs, wheel_projections = _indexed_projection_plan(
+            wheels,
+            wheel_by_site_packages,
+            fully_covered_site_pkgs,
+            top_level_to_site_pkgs,
+            known_layout_site_pkgs,
+            ordered_metadata = True,
+            literal_paths = True,
+        )
+        if wheel_projections != None:
+            literal_wheel_sites = list(set(wheel_projections.values()))
     if indexed_runfiles != None:
         top_level_to_site_pkgs, wheel_projections = _indexed_projection_plan(
             wheels,
@@ -269,6 +293,20 @@ def assemble_venv(
         )
         if wheel_projections == None:
             indexed_runfiles = None
+
+    if typecheck_layout != None:
+        # Ty reads these moved wheel paths and literal fallback paths in the
+        # ordinary .pth file below in its third-party tier. First-party roots
+        # remain higher-priority search paths.
+        wheel_paths_file = ctx.actions.declare_file(site_packages_rel + "/" + _WHEEL_PATHS_PTH)
+        wheel_paths = ""
+        if literal_wheel_sites:
+            wheel_paths = ctx.actions.args()
+            wheel_paths.use_param_file("%s", use_always = True)
+            wheel_paths.set_param_file_format("multiline")
+            wheel_paths.add_all(literal_wheel_sites, format_each = escape + "/%s")
+        ctx.actions.write(output = wheel_paths_file, content = wheel_paths)
+        declared.append(wheel_paths_file)
 
     # Per-top-level site-packages symlink: a relative symlink escaping from
     # site-packages up to the runfiles root, then down into the owning
@@ -401,10 +439,16 @@ def assemble_venv(
         if imp in fully_covered_site_pkgs:
             return None
         if imp.endswith("site-packages") and imp not in known_layout_site_pkgs:
-            return _ADDSITEDIR_LINE.format(
+            addsitedir_line = _ADDSITEDIR_LINE.format(
                 venv_escape = venv_to_runfiles_escape,
                 imp = imp,
             )
+            if typecheck_layout != None:
+                # Ty ignores executable .pth rows. The literal row keeps this
+                # fallback behind selected packages; the executable row still
+                # processes the wheel's .pth shims.
+                return ["{}/{}".format(escape, imp), addsitedir_line]
+            return addsitedir_line
         return "{}/{}".format(escape, imp)
 
     site_packages_pth_file = ctx.actions.declare_file(
