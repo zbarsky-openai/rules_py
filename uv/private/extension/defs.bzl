@@ -77,6 +77,22 @@ load(":projectfile.bzl", "collate_versions_by_name", "collect_activated_extras",
 # valid console-script declaration.
 _CONSOLE_SCRIPTS_UNSET = {"": ""}
 
+def merge_exclude_globs(
+        default_exclude_glob,
+        package_exclude_glob,
+        inherit_default_exclude_glob,
+        default_applies = True):
+    """Merge project and package exclusions without modifying either."""
+    patterns = []
+    if inherit_default_exclude_glob and default_applies:
+        for pattern in default_exclude_glob:
+            if pattern not in patterns:
+                patterns.append(pattern)
+    for pattern in package_exclude_glob:
+        if pattern not in patterns:
+            patterns.append(pattern)
+    return patterns
+
 def _dist_sha256(dist):
     """The distribution's sha256 for http_file, or None for other hash algorithms."""
     hash = dist.get("hash", "")
@@ -272,6 +288,7 @@ def _parse_projects(module_ctx, hub_specs):
                 override.pre_build_patches or
                 override.post_install_patches or
                 override.exclude_glob or
+                not override.inherit_default_exclude_glob or
                 override.extra_deps or
                 override.extra_data or
                 override.toolchains or
@@ -288,6 +305,10 @@ def _parse_projects(module_ctx, hub_specs):
         unscoped_matches = {i: 0 for i, override in enumerate(mod.tags.override_package) if override.lock == None}
 
         for project in mod.tags.project:
+            default_exclude_packages = {
+                normalize_name(name): True
+                for name in project.default_exclude_packages
+            }
             project_data = toml.decode_file(module_ctx, project.pyproject)
             lock_data = toml.decode_file(module_ctx, project.lock)
 
@@ -635,13 +656,17 @@ def _parse_projects(module_ctx, hub_specs):
 
                 post_install_patches = []
                 post_install_patch_strip = 1
-                exclude_glob = []
+                exclude_glob = merge_exclude_globs(
+                    project.default_exclude_glob,
+                    pkg_override.exclude_glob if pkg_override else [],
+                    pkg_override.inherit_default_exclude_glob if pkg_override else True,
+                    not default_exclude_packages or override_key[0] in default_exclude_packages,
+                )
                 extra_deps = []
                 extra_data = []
                 if pkg_override and not pkg_override.target:
                     post_install_patches = [str(p) for p in pkg_override.post_install_patches]
                     post_install_patch_strip = pkg_override.post_install_patch_strip
-                    exclude_glob = pkg_override.exclude_glob
                     extra_deps = [str(d) for d in pkg_override.extra_deps]
                     extra_data = [str(d) for d in pkg_override.extra_data]
 
@@ -970,6 +995,14 @@ _hub_tag = tag_class(
 
 _project_tag = tag_class(
     attrs = {
+        "default_exclude_glob": attr.string_list(
+            default = [],
+            doc = "Site-packages-relative exclusions applied after wheel installation.",
+        ),
+        "default_exclude_packages": attr.string_list(
+            default = [],
+            doc = "Normalized package names inheriting project exclusions; empty matches all.",
+        ),
         "hub_name": attr.string(
             mandatory = True,
             doc = "Name of a hub previously declared with `uv.declare_hub`.",
@@ -1083,6 +1116,10 @@ _override_package_tag = tag_class(
         "exclude_glob": attr.string_list(
             default = [],
             doc = "Site-packages-relative glob patterns to remove after wheel installation (e.g. 'numpy/**/tests/**').",
+        ),
+        "inherit_default_exclude_glob": attr.bool(
+            default = True,
+            doc = "Apply project defaults before package-specific wheel exclusions.",
         ),
         "extra_deps": attr.label_list(
             default = [],

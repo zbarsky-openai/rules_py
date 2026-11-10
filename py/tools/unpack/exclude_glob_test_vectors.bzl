@@ -1,6 +1,18 @@
 """Valid exclusion vectors shared by the installer and repository tests."""
 
 EXCLUDE_GLOB_VECTORS = [
+    ("cext.c", "**/*.c", True),
+    ("demo/cext.c", "**/*.c", True),
+    ("demo/native/cext.c", "**/*.c", True),
+    ("demo/native/cext.cc", "**/*.c", False),
+    ("demo/native/cext.cpp", "**/*.c", False),
+    ("demo/native/cext.h", "**/*.c", False),
+    ("demo/native/cext.hpp", "**/*.c", False),
+    ("demo/native/cext.S", "**/*.c", False),
+    ("demo/native/cext.pxi", "**/*.c", False),
+    ("demo/native/cext.pxd", "**/*.c", False),
+    ("demo/native/cext.pyx", "**/*.c", False),
+    ("demo/native/cext.so", "**/*.c", False),
     ("demo/tests/test_root.py", "demo/**/tests/**", True),
     ("demo/nested/tests/test_nested.py", "demo/**/tests/**", True),
     ("demo/nested/not_tests/test_nested.py", "demo/**/tests/**", False),

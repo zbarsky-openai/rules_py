@@ -1,7 +1,7 @@
 """Unit tests for helpers in defs.bzl"""
 
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//uv/private/extension:defs.bzl", "dedupe_shared_installs", "map_scc_installs", "parse_declared_console_script", "shared_install_key")
+load("//uv/private/extension:defs.bzl", "dedupe_shared_installs", "map_scc_installs", "merge_exclude_globs", "parse_declared_console_script", "shared_install_key")
 load("//uv/private/extension:graph_utils.bzl", "collect_build_deps")
 load("//uv/private/extension:lockfile.bzl", "url_basename")
 
@@ -53,6 +53,43 @@ def _url_basename_test_impl(ctx):
     return unittest.end(env)
 
 url_basename_test = unittest.make(_url_basename_test_impl)
+
+def _merge_exclude_globs_test_impl(ctx):
+    env = unittest.begin(ctx)
+    defaults = ["**/*.c"]
+
+    asserts.equals(env, [], merge_exclude_globs([], [], True))
+    asserts.equals(env, defaults, merge_exclude_globs(defaults, [], True))
+    asserts.equals(env, [], merge_exclude_globs(defaults, [], True, False))
+    asserts.equals(
+        env,
+        ["demo/tests/**"],
+        merge_exclude_globs(defaults, ["demo/tests/**"], True, False),
+    )
+    asserts.equals(
+        env,
+        ["**/*.c", "demo/tests/**"],
+        merge_exclude_globs(defaults, ["demo/tests/**"], True),
+    )
+    asserts.equals(
+        env,
+        ["demo/tests/**"],
+        merge_exclude_globs(defaults, ["demo/tests/**"], False),
+    )
+    asserts.equals(
+        env,
+        ["**/*.c", "demo/tests/**"],
+        merge_exclude_globs(
+            ["**/*.c", "**/*.c"],
+            ["**/*.c", "demo/tests/**", "demo/tests/**"],
+            True,
+        ),
+    )
+    asserts.equals(env, ["**/*.c"], defaults)
+
+    return unittest.end(env)
+
+merge_exclude_globs_test = unittest.make(_merge_exclude_globs_test_impl)
 
 def _declared_console_script_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -211,6 +248,10 @@ def _map_scc_installs_conditional_union_test_impl(ctx):
 map_scc_installs_conditional_union_test = unittest.make(_map_scc_installs_conditional_union_test_impl)
 
 def defs_test_suite():
+    unittest.suite(
+        "merge_exclude_glob_tests",
+        merge_exclude_globs_test,
+    )
     unittest.suite(
         "url_basename_tests",
         url_basename_test,
