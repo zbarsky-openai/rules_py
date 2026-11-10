@@ -16,3 +16,10 @@ bzl_library(
         "//uv/private/py_entrypoint_binary:defs",
     ],
 )
+
+bzl_library(
+    name = "repositories",
+    srcs = ["repositories.bzl"],
+    visibility = ["//visibility:public"],
+    deps = ["@bazel_lib//lib:repo_utils"],
+)

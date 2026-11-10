@@ -11,12 +11,27 @@ BCR where rules_py is consumed as a dep with `dev_dependency = True`.
 A unique hub name keeps the snapshot stable across both modes.
 """
 
+toml_inputs = use_repo_rule("@aspect_rules_py//uv:repositories.bzl", "toml_inputs")
+
+projects = [
+    "beta",
+    "gamma",
+]
+
+[toml_inputs(
+    name = project + "_toml",
+    files = {
+        "pyproject.json": "//multi-project-hub/%s:pyproject.toml" % project,
+        "uv-lock.json": "//multi-project-hub/%s:uv.lock" % project,
+    },
+) for project in projects]
+
 uv = use_extension("@aspect_rules_py//uv:extensions.bzl", "uv")
 uv.declare_hub(hub_name = "pypi_beta_only")
 uv.project(
     hub_name = "pypi_beta_only",
-    lock = "//multi-project-hub/beta:uv.lock",
-    pyproject = "//multi-project-hub/beta:pyproject.toml",
+    lock = "@beta_toml//:uv-lock.json",
+    pyproject = "@beta_toml//:pyproject.json",
 )
 uv.declare_hub(hub_name = "pypi_multi")
 uv.project(
@@ -24,14 +39,11 @@ uv.project(
     lock = "//multi-project-hub/alpha:uv.lock",
     pyproject = "//multi-project-hub/alpha:pyproject.toml",
 )
-uv.project(
+
+[uv.project(
     hub_name = "pypi_multi",
-    lock = "//multi-project-hub/beta:uv.lock",
-    pyproject = "//multi-project-hub/beta:pyproject.toml",
-)
-uv.project(
-    hub_name = "pypi_multi",
-    lock = "//multi-project-hub/gamma:uv.lock",
-    pyproject = "//multi-project-hub/gamma:pyproject.toml",
-)
+    lock = "@%s_toml//:uv-lock.json" % project,
+    pyproject = "@%s_toml//:pyproject.json" % project,
+) for project in projects]
+
 use_repo(uv, "pypi_beta_only", "pypi_multi")

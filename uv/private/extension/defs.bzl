@@ -54,13 +54,13 @@ resolved dependencies available in the `@uv` repository.
 load("@bazel_lib//lib:resource_sets.bzl", "resource_set_values")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 load("//py/private/interpreter:resolve.bzl", "resolve_host_interpreter_label")
+load("//uv:repositories.bzl", "read_toml_or_json")
 load("//uv/private:normalize_name.bzl", "normalize_name")
 load("//uv/private:normalize_version.bzl", "normalize_version")
 load("//uv/private/constraints:repository.bzl", "configurations_hub")
 load("//uv/private/git_archive:repository.bzl", "git_archive")
 load("//uv/private/sdist_build:attrs.bzl", "validate_build_attrs")
 load("//uv/private/sdist_build:repository.bzl", "sdist_build")
-load("//uv/private/tomltool:toml.bzl", "toml")
 load("//uv/private/uv_hub:repository.bzl", "uv_hub")
 load("//uv/private/uv_project:repository.bzl", "declare_project")
 load("//uv/private/uv_project:select_gen.bzl", "project_package_label")
@@ -278,8 +278,8 @@ def _parse_projects(module_ctx, declared_hubs):
                 normalize_name(name): True
                 for name in project.default_exclude_packages
             }
-            project_data = toml.decode_file(module_ctx, project.pyproject)
-            lock_data = toml.decode_file(module_ctx, project.lock)
+            project_data = read_toml_or_json(module_ctx, project.pyproject)
+            lock_data = read_toml_or_json(module_ctx, project.lock)
 
             # The stamp derives from the project name: stable across reloads and
             # unique within a hub. Repository keys are rebuilt whenever the toml
@@ -309,7 +309,7 @@ def _parse_projects(module_ctx, declared_hubs):
             lock_native_anns = {}
             for ann in mod.tags.annotate_packages:
                 if ann.lock == None or ann.lock == project.lock:
-                    annotations = toml.decode_file(module_ctx, ann.src)
+                    annotations = read_toml_or_json(module_ctx, ann.src)
                     for package in annotations.get("package", []):
                         k = _resolve(package)
                         if k == None:
