@@ -13,15 +13,15 @@ _DEFAULT_BUILD_CONFIG = "install_only"
 
 # Facts can outlive an extension implementation change, so index shape changes
 # must use a new key rather than accepting cached data from the old schema.
-# v2: mode keys became "default"/"freethreaded" and the default mode's archive
-# suffix is build_config-dependent (folded into the facts key).
-_RELEASE_INDEX_SCHEMA = 2
+# v3: install_only_stripped also selects stripped free-threaded archives.
+_RELEASE_INDEX_SCHEMA = 3
 
 def _resolve_modes(build_config):
     """Build the ordered list of runtime modes to provision.
 
     "default" uses the hub-level build_config's archive on every platform;
-    "freethreaded" parses each platform's own freethreaded_suffix, so
+    "freethreaded" uses stripped archives when requested, otherwise each
+    platform's own freethreaded_suffix. In either case,
     free-threading stays a build-time select() (see the freethreaded
     config_setting in repository.bzl). Order is default-then-freethreaded to
     keep generated output stable.
@@ -30,6 +30,11 @@ def _resolve_modes(build_config):
     strip_prefix, abi_flags, ...) in config_for_platform.
     """
     default = validate_build_config(build_config)
+    freethreaded_stripped = (
+        parse_build_config("freethreaded-install_only_stripped")
+        if build_config == "install_only_stripped"
+        else None
+    )
 
     return [
         {
@@ -43,7 +48,7 @@ def _resolve_modes(build_config):
             "repo_suffix": "freethreaded",
             "freethreaded": True,
             "config_for_platform": {
-                platform: parse_build_config(info["freethreaded_suffix"])
+                platform: freethreaded_stripped or parse_build_config(info["freethreaded_suffix"])
                 for platform, info in PLATFORMS.items()
             },
         },
@@ -488,7 +493,7 @@ size/optimization/debug tradeoffs for every provisioned version and platform.
 Supported values:
   - "install_only" (default): optimized, minimal redistributable (tar.gz).
   - "install_only_stripped": same as install_only with debug symbols removed
-    (smallest download).
+    (smallest download), including free-threaded interpreters.
   - "<opt>[+<opt>...]-full": a full archive, where each component is one of
     debug, noopt, pgo, lto, in that order. Examples: "pgo+lto-full",
     "lto-full", "noopt-full", "debug-full".

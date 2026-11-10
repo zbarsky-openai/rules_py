@@ -36,7 +36,7 @@ DEFAULT_RELEASE_DATES = [
 # musl Linux, and Windows. These exact mappings are visible in PBS manifests:
 # https://github.com/astral-sh/python-build-standalone/releases/download/20260303/SHA256SUMS
 #
-# - freethreaded_suffix: exact PBS filename suffix for the free-threaded archive
+# - freethreaded_suffix: PBS filename suffix when not using stripped archives
 #   (the non-free-threaded archive's suffix is chosen by the hub-level
 #   build_config; see parse_build_config)
 # - compatible_with: constraint_values for exec_compatible_with / target_compatible_with
@@ -159,6 +159,7 @@ def parse_build_config(suffix):
     published combination:
 
         install_only[_stripped]                    redistributable, tar.gz
+        freethreaded-install_only_stripped          redistributable, tar.gz
         [freethreaded+]<opt...>[+static]-full      full archive,     tar.zst
 
     where each <opt> component is one of debug, noopt, pgo, lto, in that
@@ -180,13 +181,14 @@ def parse_build_config(suffix):
             debug:         whether this is a Py_DEBUG build
             static:        whether libpython is statically linked
     """
-    if suffix in ("install_only", "install_only_stripped"):
+    if suffix in ("install_only", "install_only_stripped", "freethreaded-install_only_stripped"):
+        freethreaded = suffix.startswith("freethreaded-")
         return {
             "suffix": suffix,
             "extension": "tar.gz",
             "strip_prefix": "python",
-            "abi_flags": "",
-            "freethreaded": False,
+            "abi_flags": "t" if freethreaded else "",
+            "freethreaded": freethreaded,
             "debug": False,
             "static": False,
         }
