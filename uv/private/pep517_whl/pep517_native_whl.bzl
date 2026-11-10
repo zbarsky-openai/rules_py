@@ -234,6 +234,8 @@ def _derive_python_host_platform(target_os, target_cpu):
     if target_os == "darwin":
         cpu = "arm64" if target_cpu == "aarch64" else target_cpu
         return "macosx-{}-{}".format(_MACOS_DEPLOYMENT_FALLBACK, cpu)
+    if target_os == "windows":
+        return {"x86": "win32", "x86_64": "win-amd64", "aarch64": "win-arm64"}.get(target_cpu)
     return None
 
 def _interpreter_platform_triple(runtime):

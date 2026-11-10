@@ -1211,6 +1211,8 @@ def _wheel_platform_identity(target_os: str, target_cpu: str) -> tuple[str, str]
             wheel_cpu = "amd64"
         elif target_cpu == "aarch64":
             wheel_cpu = "arm64"
+        elif target_cpu == "x86":
+            wheel_cpu = "32"
         else:
             wheel_cpu = target_cpu
     else:

@@ -348,6 +348,7 @@ class WheelPlatformErrorTest(unittest.TestCase):
             ("pkg-1.0-cp313-cp313-macosx_11_0_arm64.whl", "darwin", "aarch64", "darwin"),
             ("pkg-1.0-cp313-cp313-macosx_10_9_x86_64.whl", "darwin", "x86_64", "linux"),
             ("PKG-1.0-cp313-cp313-MACOSX_11_0_ARM64.whl", "darwin", "aarch64", "darwin"),
+            ("pkg-1.0-cp313-cp313-win32.whl", "windows", "x86", "linux"),
             ("pkg-1.0-cp313-cp313-win_amd64.whl", "windows", "x86_64", "linux"),
             ("pkg-1.0-cp313-cp313-win_arm64.whl", "windows", "aarch64", "linux"),
             ("pkg-1.0-cp313-cp313-macosx_11_0_universal2.whl", "darwin", "aarch64", "darwin"),

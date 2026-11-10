@@ -254,7 +254,9 @@ def _python_host_platform_test_impl(ctx):
         ("linux", "arm", "linux-armv7l"),
         ("darwin", "aarch64", "macosx-11.0-arm64"),
         ("darwin", "x86_64", "macosx-11.0-x86_64"),
-        ("windows", "x86_64", None),
+        ("windows", "x86", "win32"),
+        ("windows", "x86_64", "win-amd64"),
+        ("windows", "aarch64", "win-arm64"),
         (None, None, None),
     ):
         asserts.equals(env, expected, derive(target_os, target_cpu))
