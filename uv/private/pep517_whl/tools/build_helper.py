@@ -46,7 +46,16 @@ filtered_args = [arg for arg in sys.argv[1:] if arg != "{debug_flag}"]
 sysroot = {sysroot!r}
 if sysroot and "-isysroot" not in filtered_args:
     filtered_args = ["-isysroot", sysroot] + filtered_args
-os.execv("{compiler_path}", ["{compiler_path}"] + filtered_args)
+compiler_path = "{compiler_path}"
+linker_path = os.path.join(os.path.dirname(compiler_path), "ld.lld")
+if (
+    sys.platform.startswith("linux")
+    and not any(arg in ("-c", "-E", "-S") for arg in filtered_args)
+    and not any(arg.startswith("-fuse-ld=") for arg in filtered_args)
+    and os.path.isfile(linker_path)
+):
+    filtered_args.insert(0, "-fuse-ld=" + linker_path)
+os.execv(compiler_path, [compiler_path] + filtered_args)
 """
 
 
@@ -626,6 +635,9 @@ def _compiler_env(
     # Bazel expands tool paths relative to the execroot. Resolve them while the
     # helper still runs there; bare tool names deliberately remain on PATH.
     _absolutize_tool_paths(env)
+    ar = shlex.split(env.get("AR", ""))
+    if sys.platform.startswith("linux") and ar and path.dirname(ar[0]):
+        env["PATH"] = pathsep.join([path.dirname(ar[0]), env["PATH"]])
 
     cc_path = _resolve_compiler_path(env, "CC", "cc")
     cxx_path = _resolve_compiler_path(env, "CXX", "c++")
@@ -741,6 +753,12 @@ def _compiler_env(
         else:
             env["AR"] = _make_ar_libtool_wrapper(tmpdir, ar_path)
     env.setdefault("AR", "ar")
+
+    import sysconfig
+
+    ldshared = sysconfig.get_config_var("LDSHARED")
+    if ldshared:
+        env.setdefault("LDSHARED", ldshared)
 
     for key, wrapper in [
         ("CC", cc),
