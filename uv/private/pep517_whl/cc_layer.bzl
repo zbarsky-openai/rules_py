@@ -11,7 +11,7 @@ _CC_DISABLED_FEATURES = [
     "layering_check",
 ]
 
-_PATH_FLAG_PREFIXES = ("-I", "-L", "-isysroot", "-iwithsysroot", "-isystem", "-B")
+_PATH_FLAG_PREFIXES = ("-I", "-L", "-isysroot", "-iwithsysroot", "-isystem", "-iquote", "-idirafter", "-B", "--sysroot=", "-resource-dir=")
 
 CC_LAYER_ATTRS = {
     "_os_linux": attr.label(default = "@platforms//os:linux"),
@@ -23,8 +23,8 @@ CC_LAYER_ATTRS = {
     "_cpu_x86_32": attr.label(default = "@platforms//cpu:x86_32"),
 }
 
-def _absolutize_flag(flag):
-    """Prefix execroot-relative paths with the EXECROOT marker.
+def absolutize_toolchain_flag(flag):
+    """Mark paths in raw C++ toolchain argv, before package flags are merged.
 
     The marker is replaced with os.getcwd() at execution time by
     build_helper.py's _compiler_env, so paths survive the backend's
@@ -170,7 +170,7 @@ def extract_cc_layer(ctx, cc_toolchain):
             action_name = action_name,
             variables = vars_map[key],
         )
-        flags[key] = " ".join([_absolutize_flag(f) for f in raw])
+        flags[key] = " ".join([absolutize_toolchain_flag(f) for f in raw])
 
     needs_pic = cc_common.action_is_enabled(
         feature_configuration = feature_configuration,
@@ -217,6 +217,6 @@ def extract_cc_layer(ctx, cc_toolchain):
 
 # Exposed for the unit tests in tests/pep517_whl_test.bzl only.
 cc_layer_test_util = struct(
-    absolutize_flag = _absolutize_flag,
+    absolutize_flag = absolutize_toolchain_flag,
     execroot_marker = _EXECROOT_MARKER,
 )

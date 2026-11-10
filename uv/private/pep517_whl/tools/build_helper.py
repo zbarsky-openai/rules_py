@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 import importlib
+import json
 import os
 import platform as _platform
 import re
@@ -44,6 +45,9 @@ import sys
 
 filtered_args = [arg for arg in sys.argv[1:] if arg != "{debug_flag}"]
 sysroot = {sysroot!r}
+compile_flags = {compile_flags!r}
+shared_link_flags = {shared_link_flags!r}
+exe_link_flags = {exe_link_flags!r}
 has_sysroot = any(
     arg in ("-isysroot", "--sysroot") or arg.startswith("--sysroot=")
     for arg in filtered_args
@@ -52,11 +56,20 @@ if sysroot and not has_sysroot:
     sysroot_args = (["-isysroot", sysroot] if sys.platform == "darwin"
                     else ["--sysroot=" + sysroot])
     filtered_args = sysroot_args + filtered_args
+is_compile = any(arg in ("-c", "-E", "-S", "-fsyntax-only") for arg in filtered_args)
+if sys.platform.startswith("linux"):
+    if is_compile:
+        filtered_args = compile_flags + filtered_args
+    elif "-shared" in filtered_args:
+        # Libraries follow the backend's objects, so --as-needed retains them.
+        filtered_args += shared_link_flags
+    else:
+        filtered_args += exe_link_flags
 compiler_path = "{compiler_path}"
 linker_path = os.path.join(os.path.dirname(compiler_path), "ld.lld")
 if (
     sys.platform.startswith("linux")
-    and not any(arg in ("-c", "-E", "-S") for arg in filtered_args)
+    and not is_compile
     and not any(arg.startswith("-fuse-ld=") for arg in filtered_args)
     and os.path.isfile(linker_path)
 ):
@@ -130,6 +143,9 @@ def _make_compiler_wrapper(
     name: str,
     compiler_path: str,
     sysroot: str | None = None,
+    compile_flags: list[str] | None = None,
+    shared_link_flags: list[str] | None = None,
+    exe_link_flags: list[str] | None = None,
 ) -> str:
     wrapper = path.join(tmpdir, ".aspect_rules_py_compilers", name)
     makedirs(path.dirname(wrapper), exist_ok=True)
@@ -138,6 +154,9 @@ def _make_compiler_wrapper(
             debug_flag=_DEBUG_FLAG,
             compiler_path=compiler_path,
             sysroot=sysroot,
+            compile_flags=compile_flags or [],
+            shared_link_flags=shared_link_flags or [],
+            exe_link_flags=exe_link_flags or [],
         ))
     chmod(wrapper, 0o755)
     return wrapper
@@ -704,8 +723,18 @@ def _compiler_env(
         cc = _make_cross_compiler_wrapper(tmpdir, "cc", cc_path, wrapper_flags, is_darwin=is_darwin_target, static_runtime_archives=static_runtime, exe_link_flags=exe_link_flags)
         cxx = _make_cross_compiler_wrapper(tmpdir, "c++", cxx_path, wrapper_flags, is_darwin=is_darwin_target, static_runtime_archives=static_runtime, exe_link_flags=exe_link_flags)
     else:
-        cc = _make_compiler_wrapper(tmpdir, "cc", cc_path, sysroot)
-        cxx = _make_compiler_wrapper(tmpdir, "c++", cxx_path, sysroot)
+        shared_link_flags = json.loads(env.pop("ASPECT_RULES_PY_SHARED_LINK_FLAGS", "[]"))
+        exe_link_flags = json.loads(env.pop("ASPECT_RULES_PY_EXE_LINK_FLAGS", "[]"))
+        cc = _make_compiler_wrapper(
+            tmpdir, "cc", cc_path, sysroot,
+            json.loads(env.pop("ASPECT_RULES_PY_C_COMPILE_FLAGS", "[]")),
+            shared_link_flags, exe_link_flags,
+        )
+        cxx = _make_compiler_wrapper(
+            tmpdir, "c++", cxx_path, sysroot,
+            json.loads(env.pop("ASPECT_RULES_PY_CXX_COMPILE_FLAGS", "[]")),
+            shared_link_flags, exe_link_flags,
+        )
 
     env.setdefault("CC", cc)
     env.setdefault("CXX", cxx)

@@ -10,7 +10,7 @@ load("@rules_cc//cc:action_names.bzl", "ACTION_NAMES")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("//py/private/interpreter:versions.bzl", "PLATFORMS")
 load("//py/private/toolchain:types.bzl", "EXEC_TOOLS_TOOLCHAIN", "NATIVE_BUILD_TOOLCHAIN", "PY_TOOLCHAIN")
-load(":cc_layer.bzl", "CC_LAYER_ATTRS", "extract_cc_layer")
+load(":cc_layer.bzl", "CC_LAYER_ATTRS", "absolutize_toolchain_flag", "extract_cc_layer")
 load(
     ":common.bzl",
     "PEP517_WHL_ATTRS",
@@ -138,6 +138,39 @@ def _cc_toolchain_inputs_and_tools(ctx):
     sysroot = getattr(cc_toolchain, "sysroot", None)
     if sysroot:
         tools["SYSROOT"] = sysroot
+    else:
+        # LLVM's zero-sysroot toolchain supplies headers and libraries through
+        # C++ action flags rather than a compiler-inferred sysroot.
+        variables = cc_common.create_compile_variables(
+            cc_toolchain = cc_toolchain,
+            feature_configuration = feature_configuration,
+        )
+        for key, action_name in (
+            ("ASPECT_RULES_PY_C_COMPILE_FLAGS", ACTION_NAMES.c_compile),
+            ("ASPECT_RULES_PY_CXX_COMPILE_FLAGS", ACTION_NAMES.cpp_compile),
+        ):
+            if cc_common.action_is_enabled(feature_configuration = feature_configuration, action_name = action_name):
+                raw = cc_common.get_memory_inefficient_command_line(
+                    feature_configuration = feature_configuration,
+                    action_name = action_name,
+                    variables = variables,
+                )
+                tools[key] = json.encode([absolutize_toolchain_flag(f) for f in raw])
+        for key, action_name, is_dynamic in (
+            ("ASPECT_RULES_PY_SHARED_LINK_FLAGS", ACTION_NAMES.cpp_link_dynamic_library, True),
+            ("ASPECT_RULES_PY_EXE_LINK_FLAGS", ACTION_NAMES.cpp_link_executable, False),
+        ):
+            if cc_common.action_is_enabled(feature_configuration = feature_configuration, action_name = action_name):
+                raw = cc_common.get_memory_inefficient_command_line(
+                    feature_configuration = feature_configuration,
+                    action_name = action_name,
+                    variables = cc_common.create_link_variables(
+                        cc_toolchain = cc_toolchain,
+                        feature_configuration = feature_configuration,
+                        is_linking_dynamic_library = is_dynamic,
+                    ),
+                )
+                tools[key] = json.encode([absolutize_toolchain_flag(f) for f in raw])
 
     infer_cxx = infer_cxx or tools.get("CXX") == tools.get("CC")
     return files, {key: value for key, value in tools.items() if value}, infer_cxx

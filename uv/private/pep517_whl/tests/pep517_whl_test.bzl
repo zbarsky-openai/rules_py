@@ -309,10 +309,18 @@ def _absolutize_flag_test_impl(ctx):
         ("-Iexternal/llvm/include", "-I" + marker + "/external/llvm/include"),
         ("-I/usr/include", "-I/usr/include"),
         ("-Bexternal/llvm/bin", "-B" + marker + "/external/llvm/bin"),
-        # "--sysroot=" is deliberately not cc_layer's job: build_helper's
-        # _absolutize_sysroot_flags rewrites it at execution time (it also
-        # handles values the backend re-splices after the chdir).
-        ("--sysroot=external/llvm/sysroot", "--sysroot=external/llvm/sysroot"),
+        ("-iquoteexternal/llvm/include", "-iquote" + marker + "/external/llvm/include"),
+        ("-idirafterbazel-out/bin/llvm/include", "-idirafter" + marker + "/bazel-out/bin/llvm/include"),
+        ("-iquote/usr/include", "-iquote/usr/include"),
+        ("-idirafter/usr/include", "-idirafter/usr/include"),
+        ("-resource-dir=bazel-out/bin/llvm/resource_directory", "-resource-dir=" + marker + "/bazel-out/bin/llvm/resource_directory"),
+        ("-resource-dir=external/llvm/lib/clang/20", "-resource-dir=" + marker + "/external/llvm/lib/clang/20"),
+        ("-resource-dir=/usr/lib/clang/20", "-resource-dir=/usr/lib/clang/20"),
+        ("-resource-dir", "-resource-dir"),
+        # Raw toolchain sysroots are marked; build_helper still handles
+        # sysroot flags supplied separately by package builds in cross mode.
+        ("--sysroot=external/llvm/sysroot", "--sysroot=" + marker + "/external/llvm/sysroot"),
+        ("--sysroot=/dev/null", "--sysroot=/dev/null"),
         ("-O2", "-O2"),
     ):
         asserts.equals(env, expected, absolutize(flag))
