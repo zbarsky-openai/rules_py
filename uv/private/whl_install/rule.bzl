@@ -152,12 +152,15 @@ def _whl_install(ctx):
     py_toolchain = ctx.toolchains[PY_TOOLCHAIN].py3_runtime
     exec_runtime = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN].exec_runtime
 
-    # Name the install tree after the target rather than a fixed "install"
-    # so several whl_install targets can coexist in one package without
-    # declaring conflicting outputs.
-    install_dir = ctx.actions.declare_directory(
-        ctx.label.name + ".install",
+    # Runfiles omit the Bazel configuration. Give each interpreter ABI its own
+    # parent while preserving the target-named install tree.
+    install_path = "python{}.{}{}/{}.install".format(
+        py_toolchain.interpreter_version_info.major,
+        py_toolchain.interpreter_version_info.minor,
+        py_toolchain.abi_flags,
+        ctx.label.name,
     )
+    install_dir = ctx.actions.declare_directory(install_path)
 
     archive = ctx.file.src
     unpack_script = ctx.file._unpack_script
@@ -273,11 +276,9 @@ def _whl_install(ctx):
     )
 
     # Runfiles-root-relative path to the install tree's site-packages.
-    # Derived from the same label components as `install_dir` above so the
-    # two can never drift apart.
     site_packages_rfpath = "/".join([
         segment
-        for segment in [ctx.label.repo_name, ctx.label.package, ctx.label.name + ".install"]
+        for segment in [ctx.label.repo_name or ctx.workspace_name, ctx.label.package, install_path]
         if segment
     ] + ["lib/python{}.{}/site-packages".format(
         py_toolchain.interpreter_version_info.major,

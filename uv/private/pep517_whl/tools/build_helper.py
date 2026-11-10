@@ -650,12 +650,14 @@ def _compiler_env(
     # merges (it only merges lib/site-packages) — so they land on neither
     # sys.path nor PATH. They are still real runfiles; walk the runfiles
     # roots for whl_install bin/ dirs and put those on PATH.
+    # Match whl_install's namespace for the frontend interpreter and ABI.
+    runtime_dir = f"python{sys.version_info.major}.{sys.version_info.minor}{sys.abiflags}"
     bin_dirs = []
     for runfiles_root in sys.path:
         if not path.isdir(runfiles_root) or "runfiles" not in runfiles_root:
             continue
         for entry in os.listdir(runfiles_root):
-            bin_dir = path.join(runfiles_root, entry, "actual_install.install", "bin")
+            bin_dir = path.join(runfiles_root, entry, runtime_dir, "actual_install.install", "bin")
             if path.isdir(bin_dir):
                 bin_dirs.append(bin_dir)
 
