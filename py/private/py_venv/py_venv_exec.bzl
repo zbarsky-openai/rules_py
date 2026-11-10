@@ -131,9 +131,9 @@ def _py_venv_exec_impl(ctx):
     runfiles = ctx.runfiles(
         files = ctx.files.data + [main],
         transitive_files = depset(transitive = [vinfo.transitive_sources] + data_sources),
-    ).merge(vinfo.runtime_runfiles).merge_all(
+    ).merge_all(
         [target[DefaultInfo].default_runfiles for target in ctx.attr.data],
-    )
+    ).merge(vinfo.runtime_runfiles)
     if ctx.attr.include_console_scripts:
         runfiles = runfiles.merge(ctx.runfiles(transitive_files = vinfo.console_scripts))
 

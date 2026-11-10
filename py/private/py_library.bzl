@@ -176,7 +176,7 @@ def _py_library_impl(ctx):
     imports = _make_imports_depset(ctx)
     virtuals = _make_virtual_depset(ctx)
     resolutions = _make_virtual_resolutions_depset(ctx)
-    runfiles = _make_merged_runfiles(ctx)
+    runfiles = _make_merged_runfiles(ctx, extra_runfiles = ctx.files.srcs)
     instrumented_files_info = _make_instrumented_files_info(ctx)
     wheels = _make_wheels_depset(ctx)
 
