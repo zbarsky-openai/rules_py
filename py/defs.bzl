@@ -64,6 +64,7 @@ py_venv = _py_venv
 py_venv_link = _py_venv_link
 
 py_library = _py_library
+py_test_rule = _py_venv_exec_test
 py_unpacked_wheel = _py_unpacked_wheel
 
 py_image_layer = _py_image_layer
@@ -169,7 +170,7 @@ def py_binary(name, srcs = [], main = None, **kwargs):
         **kwargs
     )
 
-def py_test(name, srcs = [], main = None, **kwargs):
+def py_test(name, srcs = [], main = None, test_rule = _py_venv_exec_test, **kwargs):
     """Identical to [py_binary](#function-py_binary), but produces a target that can be used with `bazel test`.
 
     `py_test` is a generic test rule: it runs a Python file as a test, nothing
@@ -202,7 +203,7 @@ def py_test(name, srcs = [], main = None, **kwargs):
     kwargs["testonly"] = True
 
     _py_binary_with_venv(
-        _py_venv_exec_test,
+        test_rule,
         name = name,
         srcs = srcs,
         deps = kwargs.pop("deps", []),
