@@ -624,7 +624,7 @@ def _split_kwargs_for_venv(kwargs, expose_venv):
                 venv_kwargs[name] = kwargs[name]
     return venv_kwargs
 
-def py_binary_with_venv(py_rule, name, main, srcs = [], deps = [], data = [], imports = [], tags = None, testonly = None, visibility = None, isolated = True, expose_venv = None, expose_venv_link = False, freethreaded = None, **kwargs):
+def py_binary_with_venv(py_rule, name, main, srcs = [], deps = [], data = [], imports = [], tags = None, testonly = None, visibility = None, isolated = True, expose_venv = None, expose_venv_link = False, freethreaded = None, venv_name = None, **kwargs):
     """Split `py_rule(name, ...)` into a sibling py_venv target + a
     `py_rule` call routed at it via the internal `venv` rule
     attribute. Called for every `py_binary` / `py_test` macro invocation.
@@ -671,13 +671,15 @@ def py_binary_with_venv(py_rule, name, main, srcs = [], deps = [], data = [], im
     # Target names can contain `/` (Bazel allows it), but venv labels
     # and the on-disk venv basename must be slash-free.
     safe_name = name.replace("/", "_")
+    # Symbolic macros require generated targets to share their name prefix.
+    # Let their callers choose a legal private name without exposing the venv.
     if expose_venv:
-        venv_label = "{}.venv".format(name)
+        venv_label = venv_name or "{}.venv".format(name)
         venv_visibility = visibility
         venv_tags = None
         venv_rule = py_venv
     else:
-        venv_label = "_{}.venv".format(safe_name)
+        venv_label = venv_name or "_{}.venv".format(safe_name)
         venv_visibility = ["//visibility:private"]
         venv_tags = ["manual"]
         venv_rule = _py_venv_lib
