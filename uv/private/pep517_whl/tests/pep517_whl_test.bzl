@@ -94,10 +94,19 @@ def _toolchain_env_test_impl(ctx):
 
     action_inputs = [f.path for f in build_actions[0].inputs.to_list()]
     for key in _CC_ENV_KEYS:
+        tool = action_env.get(key)
         asserts.true(
             env,
-            action_env.get(key) in action_inputs,
+            any([tool == input or tool.startswith(input + "/") for input in action_inputs]),
             "{} should select a declared C++ action tool".format(key),
+        )
+
+    sysroot = action_env.get("SYSROOT")
+    if sysroot:
+        asserts.true(
+            env,
+            any([path == sysroot or path.startswith(sysroot + "/") for path in action_inputs]),
+            "SYSROOT should select a declared C++ toolchain input",
         )
 
     return analysistest.end(env)

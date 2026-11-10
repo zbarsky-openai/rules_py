@@ -133,6 +133,12 @@ def _cc_toolchain_inputs_and_tools(ctx):
         }
         tools.update({key: legacy_tools[key] for key in missing if legacy_tools[key] in file_paths})
 
+    # all_files already includes the configured sysroot. Native Python build
+    # backends invoke compiler drivers directly, so forward its location too.
+    sysroot = getattr(cc_toolchain, "sysroot", None)
+    if sysroot:
+        tools["SYSROOT"] = sysroot
+
     infer_cxx = infer_cxx or tools.get("CXX") == tools.get("CC")
     return files, {key: value for key, value in tools.items() if value}, infer_cxx
 

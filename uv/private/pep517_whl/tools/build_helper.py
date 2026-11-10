@@ -44,8 +44,14 @@ import sys
 
 filtered_args = [arg for arg in sys.argv[1:] if arg != "{debug_flag}"]
 sysroot = {sysroot!r}
-if sysroot and "-isysroot" not in filtered_args:
-    filtered_args = ["-isysroot", sysroot] + filtered_args
+has_sysroot = any(
+    arg in ("-isysroot", "--sysroot") or arg.startswith("--sysroot=")
+    for arg in filtered_args
+)
+if sysroot and not has_sysroot:
+    sysroot_args = (["-isysroot", sysroot] if sys.platform == "darwin"
+                    else ["--sysroot=" + sysroot])
+    filtered_args = sysroot_args + filtered_args
 compiler_path = "{compiler_path}"
 linker_path = os.path.join(os.path.dirname(compiler_path), "ld.lld")
 if (
@@ -644,7 +650,9 @@ def _compiler_env(
     if env.pop("ASPECT_RULES_PY_INFER_CXX_COMPANION", None) == "1":
         cxx_path = _local_cxx_companion(env.get("CXX"), cxx_path)
 
-    sysroot = _darwin_sysroot()
+    # Resolve Bazel's execroot-relative Linux sysroot before setuptools
+    # changes into the unpacked source distribution.
+    sysroot = _absolutize_path(env["SYSROOT"]) if env.get("SYSROOT") else _darwin_sysroot()
 
     if cross:
         # Toolchain flag strings (from cc_layer.bzl) contain execroot-relative
