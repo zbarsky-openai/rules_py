@@ -568,6 +568,50 @@ def _namespace_entry_collapse_skips_entryless_dirs_test_impl(ctx):
     asserts.equals(env, [], collisions)
     return unittest.end(env)
 
+def _nested_namespace_prefix_test_impl(ctx):
+    env = unittest.begin(ctx)
+    sp_a = "external/pypi_a/site-packages"
+    sp_b = "external/pypi_b/site-packages"
+    entries_a = ["google/cloud", "google/cloud/storage"]
+    entries_b = ["google/cloud/bigquery/client.py", "google/cloud_extra/client.py"]
+    wheels = [
+        _make_wheel(
+            site_packages_rfpath = sp_a,
+            tl_claims = [("google", _claim(sp_a, is_ns = True, ns_entries = entries_a))],
+            ns_entries = entries_a,
+            top_levels = ["google"],
+        ),
+        _make_wheel(
+            site_packages_rfpath = sp_b,
+            tl_claims = [("google", _claim(sp_b, is_ns = True, ns_entries = entries_b))],
+            ns_entries = entries_b,
+            top_levels = ["google"],
+        ),
+    ]
+    for order in [wheels, list(reversed(wheels))]:
+        top_level, fully_covered, _, merge_groups, _, collisions = resolve_wheel_collisions(
+            _mock_ctx(ctx.label),
+            order,
+            console_scripts = True,
+        )
+        asserts.equals(env, {
+            "google/cloud": sp_a,
+            "google/cloud_extra/client.py": sp_b,
+        }, top_level)
+        asserts.equals(env, {sp_a: True}, fully_covered)
+        asserts.equals(env, [], merge_groups)
+        asserts.equals(env, [struct(
+            label = str(ctx.label),
+            what = "namespace entry",
+            message = None,
+            name = "google/cloud/bigquery/client.py",
+            a = sp_a,
+            b = sp_b,
+        )], collisions)
+    return unittest.end(env)
+
+_nested_namespace_prefix_test = unittest.make(_nested_namespace_prefix_test_impl)
+
 _single_wheel_test = unittest.make(_single_wheel_test_impl)
 _namespace_merge_test = unittest.make(_namespace_merge_test_impl)
 _console_script_collision_test = unittest.make(_console_script_collision_test_impl)
@@ -589,6 +633,7 @@ def virtuals_resolvers_test_suite(name):
     unittest.suite(
         name,
         _single_wheel_test,
+        _nested_namespace_prefix_test,
         _namespace_merge_test,
         _console_script_collision_test,
         _regular_collision_keeps_fallback_test,

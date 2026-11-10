@@ -187,9 +187,13 @@ def _dedupe_prefix_conflicts(entry_owner, tl, state, complain):
     ``package_collisions`` rather than silently mis-merging.
     """
     for entry in list(entry_owner.keys()):
-        segments = entry.split("/")
-        for depth in range(2, len(segments)):
-            shallower = entry_owner.get("/".join(segments[:depth]))
+        separators = entry.count("/")
+        if separators < 2:
+            continue
+        separator = entry.find("/")
+        for _ in range(separators - 1):
+            separator = entry.find("/", separator + 1)
+            shallower = entry_owner.get(entry[:separator])
             if shallower == None:
                 continue
             loser = entry_owner.pop(entry)
