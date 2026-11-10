@@ -559,10 +559,12 @@ def _parse_projects(module_ctx, hub_specs):
                 # default and set if we do a build.
                 has_sbuild = False
 
-                is_no_binary = normalize_name(package["name"]) in no_binary_packages
+                is_no_binary = normalize_name(package["name"]) in no_binary_packages or bool(
+                    pkg_override and pkg_override.pre_build_patches
+                )
 
                 if is_no_binary and not sdist:
-                    fail("Package {} is in [tool.uv] no-binary-package but has no sdist in the lockfile".format(package["name"]))
+                    fail("Package {} requires a source build but has no sdist in the lockfile".format(package["name"]))
                 if pkg_override and not sdist:
                     validate_build_attrs(
                         console_scripts = sbuild_console_scripts,
