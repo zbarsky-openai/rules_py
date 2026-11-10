@@ -116,7 +116,8 @@ def _indexed_projection_plan(wheels, wheel_by_site_packages, fully_covered, proj
     import_spellings = {}
     projected_pth_sites = set()
     candidate_entries = {}
-    for entry, site_packages in projections.items():
+    for entry in projections:
+        site_packages = projections[entry]
         wheel = wheel_by_site_packages.get(site_packages)
         if wheel == None or entry in wheel.metadata_top_levels:
             if ordered_metadata and wheel != None:
@@ -160,7 +161,8 @@ def _indexed_projection_plan(wheels, wheel_by_site_packages, fully_covered, proj
                 import_spellings[name] = None
 
     eligible_wheels = {}
-    for entry, name in candidate_entries.items():
+    for entry in candidate_entries:
+        name = candidate_entries[entry]
         site_packages = projections[entry]
         if site_packages not in fully_covered or import_spellings[name] == None:
             eligible_wheels[site_packages] = None
@@ -168,13 +170,16 @@ def _indexed_projection_plan(wheels, wheel_by_site_packages, fully_covered, proj
             eligible_wheels[site_packages] = True
 
     retained_projections = {}
-    for entry, site_packages in projections.items():
+    for entry in projections:
+        site_packages = projections[entry]
         if not eligible_wheels.get(site_packages) or (
             entry not in candidate_entries and
             not entry.endswith(".dist-info") and
             not entry.endswith(".egg-info")
         ):
-            retained_projections[entry] = projections.pop(entry)
+            retained_projections[entry] = site_packages
+    for entry in retained_projections:
+        projections.pop(entry)
 
     return retained_projections, projections
 
