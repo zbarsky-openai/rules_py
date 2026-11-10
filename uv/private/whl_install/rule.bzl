@@ -261,6 +261,7 @@ def _whl_install(ctx):
         executable = exec_runtime.interpreter,
         toolchain = EXEC_TOOLS_TOOLCHAIN,
         arguments = [arguments],
+        env = {"PYTHONHASHSEED": "0"},
         inputs = depset(transitive = transitive_inputs),
         outputs = [
             install_dir,
