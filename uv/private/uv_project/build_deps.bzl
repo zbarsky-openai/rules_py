@@ -2,7 +2,7 @@
 
 load("//uv/private/extension:graph_utils.bzl", "reachable_build_deps")
 load("//uv/private/pprint:defs.bzl", "indent", "pprint")
-load("//uv/private/uv_project:select_gen.bzl", "EMPTY_LIBRARY", "conditional_dep", "marker_interner", "safe_name", "write_markers")
+load("//uv/private/uv_project:select_gen.bzl", "EMPTY_LIBRARY", "conditional_dep", "marker_interner", "write_markers")
 
 def _unresolved_build_requirement_impl(ctx):
     fail("Build requirement '{}' has multiple locked versions without disjoint resolution markers.".format(ctx.attr.requirement))
@@ -16,16 +16,16 @@ def write_build_dep_records(repository_ctx, available_deps, build_deps):
     """Write each requirement's label, candidates, and complete build closure."""
     packages = build_deps["packages"]
     graph = build_deps["scc_graph"]
-    for name in sorted({name: True for name in list(available_deps) + list(packages)}):
-        candidates = packages.get(name, [])
+    for name, candidates in packages.items():
         repository_ctx.file("build_deps_records/" + name + ".json", json.encode({
-            "label": available_deps.get(name),
+            "label": available_deps[name],
             "candidates": candidates,
             "scc_graph": reachable_build_deps({name: candidates}, graph),
         }))
 
 def read_build_dep_records(repository_ctx, anchor, names):
     """Read only discovered requirements, watching absent names too."""
+
     # The exported BUILD file locates the records; its contents are not an input.
     root = repository_ctx.path(anchor).dirname
     available_deps = {}
@@ -43,31 +43,19 @@ def read_build_dep_records(repository_ctx, anchor, names):
             graph.update(data["scc_graph"])
     return available_deps, {"packages": packages, "scc_graph": graph}
 
-def write_build_deps(repository_ctx, packages, scc_graph, marker_fn = None):
-    """Write the build requirements and their SCC dependency graph.
+PY_LIBRARY_LOAD = 'load("@aspect_rules_py//py:defs.bzl", "py_library")'
+BUILD_DEPS_LOAD = PY_LIBRARY_LOAD + '\nload("@aspect_rules_py//uv/private/uv_project:build_deps.bzl", "unresolved_build_requirement")'
 
-    Args:
-        repository_ctx: Repository context receiving the generated BUILD files.
-        packages: Package names mapped to candidates with deps (install and SCC
-            labels) and markers (the resolution markers selecting that version).
-        scc_graph: SCC identifiers mapped to member labels and marker expressions.
-        marker_fn: Optional callback that interns markers in the caller's table.
-            Without it, conditional members use markers and an empty fallback
-            generated in this repository.
-    """
-    marker_table = {}
-    _marker = marker_fn or marker_interner(marker_table)
-
-    content = ["""\
-load("@aspect_rules_py//py:defs.bzl", "py_library")
-"""]
+def render_build_deps(packages, scc_graph, marker_fn):
+    """Render the two sets of declarations shared by project modules and sdist BUILD files."""
+    components = []
     for scc_id, members in scc_graph.items():
         # Ordinals make private conditional aliases unique within each SCC.
         deps = [
-            conditional_dep(content, member, markers, "_maybe__{}__member_{}".format(scc_id, i), _marker, "//private/sccs:empty")
+            conditional_dep(components, member, markers, "_maybe__{}__member_{}".format(scc_id, i), marker_fn, "//private/sccs:empty")
             for i, (member, markers) in enumerate(members.items())
         ]
-        content.append("""
+        components.append("""
 py_library(
     name = "{name}",
     deps = {deps},
@@ -77,12 +65,7 @@ py_library(
             name = scc_id,
             deps = indent(pprint(deps), " " * 4).lstrip(),
         ))
-    repository_ctx.file("private/build_deps/sccs/BUILD.bazel", "\n".join(content))
-
-    content = ["""\
-load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("@aspect_rules_py//uv/private/uv_project:build_deps.bzl", "unresolved_build_requirement")
-"""]
+    requirements = []
     for package, candidates in packages.items():
         arms = {}
         ambiguous = False
@@ -93,7 +76,7 @@ load("@aspect_rules_py//uv/private/uv_project:build_deps.bzl", "unresolved_build
                     ambiguous = True
                 markers = {"": 1}
             for marker in sorted(markers):
-                condition = _marker(marker) if marker else "//conditions:default"
+                condition = marker_fn(marker) if marker else "//conditions:default"
                 if condition in arms and arms[condition] != candidate["deps"]:
                     ambiguous = True
                 arms[condition] = candidate["deps"]
@@ -101,7 +84,7 @@ load("@aspect_rules_py//uv/private/uv_project:build_deps.bzl", "unresolved_build
         if ambiguous:
             # Unrelated runtime groups can use a multi-version lock without
             # requesting this ambiguous build requirement.
-            content.append("""
+            requirements.append("""
 unresolved_build_requirement(
     name = {name},
     requirement = {name},
@@ -119,7 +102,7 @@ unresolved_build_requirement(
                 indent(pprint(arms), " " * 4).lstrip(),
                 repr("No locked version of build requirement '{}' matches the current Python/platform configuration.".format(package)),
             )
-        content.append("""
+        requirements.append("""
 py_library(
     name = "{name}",
     deps = {deps},
@@ -129,8 +112,14 @@ py_library(
             name = package,
             deps = deps,
         ))
-    repository_ctx.file("private/build_deps/BUILD.bazel", "\n".join(content))
+    return struct(components = components, requirements = requirements)
 
-    if marker_fn == None and marker_table:
+def write_build_deps(repository_ctx, packages, scc_graph):
+    """Write the selected build requirements and their local closure for an sdist."""
+    marker_table = {}
+    decls = render_build_deps(packages, scc_graph, marker_interner(marker_table))
+    repository_ctx.file("private/build_deps/sccs/BUILD.bazel", "\n".join([PY_LIBRARY_LOAD + "\n"] + decls.components))
+    repository_ctx.file("private/build_deps/BUILD.bazel", "\n".join([BUILD_DEPS_LOAD + "\n"] + decls.requirements))
+    if marker_table:
         repository_ctx.file("private/sccs/BUILD.bazel", EMPTY_LIBRARY)
         write_markers(repository_ctx, marker_table)

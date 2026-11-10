@@ -11,6 +11,7 @@ bzl_library(
     srcs = ["repository.bzl"],
     deps = [
         "//uv/private/pprint:defs",
+        "//uv/private/uv_project:select_gen",
     ],
 )
 
@@ -29,9 +30,9 @@ bzl_library(
 write_source_files(
     name = "snapshots",
     files = {
-        # uv_hub: public helpers consumed via @pypi//:defs.bzl. Pins
-        # VIRTUALENVS list, _repo string, and the compatible_with helpers.
-        "snapshots/pypi.defs.bzl": "@pypi//:defs.bzl",
+        # The compatibility helpers and group membership are separate generated inputs.
+        "snapshots/pypi.compatibility.bzl": "@pypi//:compatibility.bzl",
+        "snapshots/pypi.deps.aspect_rules_py.bzl": "@pypi//dep_group:deps/aspect_rules_py.bzl",
         # uv_hub: rules_python-compat shim. Pins the canonical-name format
         # used by the requirement() helper.
         "snapshots/pypi.requirements.bzl": "@pypi//:requirements.bzl",
@@ -47,15 +48,11 @@ write_source_files(
         # dep_group surface (the `dep_group` alias plus one config_setting
         # per uv.project() call).
         "snapshots/pypi.dep_group.BUILD.bazel": "@pypi//dep_group:BUILD.bazel",
-        # uv_project: package-name → SCC alias map and Gazelle indexes. Pins
-        # that inactive dev-only packages stay out of the project surface.
-        "snapshots/project.BUILD.bazel": "@project__aspect_rules_py//:BUILD.bazel",
-        # uv_project: py_library SCC definitions with wheel installs and
-        # cross-SCC deps. Pins that inactive dev-only SCCs are not emitted.
-        "snapshots/project.private.sccs.BUILD.bazel": "@project__aspect_rules_py//private/sccs:BUILD.bazel",
-        # uv_project: decide_marker rules keyed by SHA1 of the marker
-        # expression. Pins marker emission and the hashing scheme.
-        "snapshots/project.private.markers.BUILD.bazel": "@project__aspect_rules_py//private/markers:BUILD.bazel",
+        # The public project root delegates to the index, while normal hub aliases load
+        # a single distribution and the marker declarations used in its selects.
+        "snapshots/project.surface.BUILD.bazel": "@project__aspect_rules_py//:BUILD.bazel",
+        "snapshots/project.cowsay.bzl": "@project__aspect_rules_py__distribution_cowsay//:defs.bzl",
+        "snapshots/project.marker.bzl": "@project__aspect_rules_py__marker_62//:defs.bzl",
         # configurations_hub: Python platform-triple config_setting_groups
         # used by whl_install to pick the right pre-built wheel. Largest
         # snapshot (~1200 lines) — the resolver's flattened output shape.

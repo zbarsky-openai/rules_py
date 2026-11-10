@@ -1,31 +1,9 @@
-"""
-
-"""
+"""Generate public package aliases and dependency group files for a Python hub."""
 
 load("//uv/private/pprint:defs.bzl", "indent", "pprint")
+load("//uv/private/uv_project:select_gen.bzl", "project_package_label")
 
-def _hub_impl(repository_ctx):
-    """Generates the central hub repository that exposes resolved dependencies to the build.
-
-    - Defines a helper alias for configuring the active [dependency-group]
-    - Defines aliases for every package in any component project
-
-    This "surface" hub is dead easy, as it just wraps up project hubs which are
-    responsible for all the heavy lifting.
-
-    Args:
-        repository_ctx: The repository context.
-    """
-
-    # {requirement: {cfg: target}}
-    packages = json.decode(repository_ctx.attr.packages)
-    testonly_packages = json.decode(repository_ctx.attr.testonly_packages)
-    package_names = sorted(packages.keys())
-
-    ################################################################################
-    # Lay down the //dep_group:BUILD.bazel file with config flags
-    #
-    # We do this first because everything else hangs off of these config_settings.
+def _write_settings(repository_ctx):
     content = [
         """\
 alias(
@@ -36,7 +14,6 @@ alias(
 """,
     ]
 
-    # Lay down the dep_group config settings
     for name in repository_ctx.attr.configurations:
         content.append(
             """
@@ -51,22 +28,18 @@ config_setting(
         )
     content.append("""
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel"] + glob(["deps/*.bzl"], allow_empty = True),
     visibility = ["//visibility:public"],
 )
 """)
     repository_ctx.file("dep_group/BUILD.bazel", content = "\n".join(content))
 
-    ################################################################################
-    # Lay down the //:BUILD.bazel file
-    content = []
-
     index_select_clauses = {
-        "//dep_group:" + cfg: ["@{}//:gazelle_index_whls".format(project_id)]
-        for cfg, project_id in repository_ctx.attr.configurations.items()
+        "//dep_group:" + cfg: [str(index)]
+        for cfg, index in repository_ctx.attr.configurations.items()
     }
 
-    content.append("""\
+    repository_ctx.file("BUILD.bazel", """\
 filegroup(
     name = "gazelle_index_whls",
     srcs = select({index_select_clauses},
@@ -75,37 +48,24 @@ filegroup(
 )
 
 exports_files(
-    ["defs.bzl", "requirements.bzl"],
+    ["compatibility.bzl", "requirements.bzl"],
     visibility = ["//visibility:public"],
 )
 """.format(index_select_clauses = indent(pprint(index_select_clauses), "        ").lstrip()))
 
-    repository_ctx.file("BUILD.bazel", "\n".join(content))
+def _hub_package_build(package_name, groups, configurations, testonly):
+    testonly_attr = "\n    testonly = True," if testonly else ""
 
-    ################################################################################
-    # Lay down the hub aliases
-    for package_name, specs in packages.items():
-        testonly_attr = "\n    testonly = True," if package_name in testonly_packages else ""
-        content = [
-            """\
-load("//:defs.bzl", "compatible_with")
-""",
-        ]
+    package_label = project_package_label(package_name)
+    select_spec = {
+        "//dep_group:" + group: "@@" + configurations[group].repo_name + package_label
+        for group in groups
+    }
+    whl_select_spec = {condition: label + "_whl" for condition, label in select_spec.items()}
 
-        select_spec = {
-            "//dep_group:{}".format(cfg): l
-            for cfg, l in specs.items()
-        }
-        whl_select_spec = {
-            "//dep_group:{}".format(cfg): l + "_whl"
-            for cfg, l in specs.items()
-        }
-
-        error = "Available only in dep_groups: " + ", ".join(specs.keys())  # Simplified error string
-
-        # When the package itself is named "pkg", the `:{name}` alias below already
-        # exposes a `pkg` target — emitting a separate `:pkg` alias would collide.
-        pkg_alias = "" if package_name == "pkg" else """\
+    # When the package itself is named "pkg", the `:{name}` alias below already
+    # exposes a `pkg` target — emitting a separate `:pkg` alias would collide.
+    pkg_alias = "" if package_name == "pkg" else """\
 alias(
     name = "pkg",{testonly}
     actual = "{name}",
@@ -113,9 +73,10 @@ alias(
 )
 """.format(name = package_name, testonly = testonly_attr)
 
-        # FIXME: Add support for entrypoints?
-        content.append(
-            """
+    return """\
+load("//:compatibility.bzl", "compatible_with")
+
+
 {pkg_alias}\
 alias(
     name = "whl",
@@ -137,37 +98,45 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 """.format(
-                name = package_name,
-                pkg_alias = pkg_alias,
-                lib_select = indent(pprint(select_spec), "      ").lstrip(),
-                whl_select = indent(pprint(whl_select_spec), "      ").lstrip(),
-                compat = repr(specs.keys()),
-                error = error,
-                testonly = testonly_attr,
-            ),
+        name = package_name,
+        pkg_alias = pkg_alias,
+        lib_select = indent(pprint(select_spec), "      ").lstrip(),
+        whl_select = indent(pprint(whl_select_spec), "      ").lstrip(),
+        compat = repr(groups),
+        error = "Available only in dep_groups: " + ", ".join(groups),
+        testonly = testonly_attr,
+    )
+
+def _hub_impl(repository_ctx):
+    configurations = repository_ctx.attr.configurations
+    packages = repository_ctx.attr.packages
+    testonly_packages = {name: True for name in repository_ctx.attr.testonly_packages}
+    package_names = sorted(packages.keys())
+
+    _write_settings(repository_ctx)
+
+    # Iterate distributions in order so each group's exported DEPS is sorted.
+    deps_by_group = {group: [] for group in configurations}
+    for package_name in package_names:
+        groups = packages[package_name]
+        repository_ctx.file(
+            package_name + "/BUILD.bazel",
+            _hub_package_build(package_name, groups, configurations, package_name in testonly_packages),
         )
 
-        repository_ctx.file(package_name + "/BUILD.bazel", content = "\n".join(content))
+        hub_label = "@@{}//{}:pkg".format(repository_ctx.name, package_name)
+        for group in groups:
+            deps_by_group[group].append(hub_label)
 
-    ################################################################################
-    # Lay down //:defs.bzl
+    for group, deps in deps_by_group.items():
+        repository_ctx.file(
+            "dep_group/deps/{}.bzl".format(group),
+            content = "DEPS = [Label(dep) for dep in {}]\n".format(pprint(deps)),
+        )
 
-    # Invert the sparse package->group membership (`packages` is keyed
-    # {name: {group: target}}) into group->[canonical :pkg labels] in a single
-    # pass, rather than rescanning every package once per group. Seed every
-    # known group so a group with no packages still gets an (empty) select arm.
-    deps_by_group = {group: [] for group in sorted(repository_ctx.attr.configurations)}
-    for name in package_names:  # sorted, so each group's label list stays sorted
-        label = "@@{}//{}:pkg".format(repository_ctx.name, name)
-        for group in packages[name]:
-            if group in deps_by_group:
-                deps_by_group[group].append(label)
-
-    # The emitted `_GROUP_DEPS` is a module-level select() built once at load.
-    # Its keys use `Label(...)` so they resolve relative to this hub repo rather
-    # than the consuming package that loads `group_deps()`.
-    content = [
-        """\
+    # Per-wheel BUILD files need only the environment names and constraints.
+    # Keep this module independent of the hub-wide distribution index.
+    repository_ctx.file("compatibility.bzl", content = """\
 VIRTUALENVS = {configurations}
 
 def compatible_with(venvs, extra_constraints = []):
@@ -193,47 +162,9 @@ def incompatible_with(venvs, extra_constraints = []):
     }} | {{
         "//conditions:default": extra_constraints,
     }}
+""".format(configurations = pprint(configurations.keys())))
 
-_DEPS_BY_GROUP = {deps_by_group}
-
-_GROUP_DEP_LABELS = {{
-    group: [Label(dep) for dep in deps]
-    for group, deps in _DEPS_BY_GROUP.items()
-}}
-
-_GROUP_DEPS = select(
-    {{
-        Label("//dep_group:" + group): deps
-        for group, deps in _GROUP_DEP_LABELS.items()
-    }},
-    no_match_error = {no_match_error},
-)
-
-def group_deps_for(group):
-    if group not in _GROUP_DEP_LABELS:
-        fail("unknown dep_group %r; expected one of: %s" % (group, ", ".join(sorted(_GROUP_DEP_LABELS))))
-    return _GROUP_DEP_LABELS[group]
-
-def group_deps():
-    return _GROUP_DEPS
-""".format(
-            configurations = pprint(repository_ctx.attr.configurations.keys()),
-            deps_by_group = pprint(deps_by_group),
-            no_match_error = repr(
-                "no dep_group selected; set the dep_group attribute on the consuming target to one of: " +
-                ", ".join(sorted(repository_ctx.attr.configurations)),
-            ),
-        ),
-    ]
-
-    repository_ctx.file("defs.bzl", content = "\n".join(content))
-
-    ################################################################################
-    # Lay down a requirements.bzl for compatibility with rules_python. Keep this
-    # file's surface aligned with rules_python's generated requirements.bzl; any
-    # rules_py-specific additions belong in defs.bzl instead.
-    content = []
-    content.append("""
+    repository_ctx.file("requirements.bzl", """
 load("@aspect_rules_py//uv/private:normalize_name.bzl", "normalize_name")
 
 all_requirements = {all_requirements}
@@ -257,7 +188,6 @@ def requirement(name):
         }),
         repo_name = repository_ctx.name,
     ))
-    repository_ctx.file("requirements.bzl", content = "\n".join(content))
 
     return repository_ctx.repo_metadata(reproducible = True)
 
@@ -265,48 +195,18 @@ uv_hub = repository_rule(
     doc = """
     Generates the surface hub repository exposed to the build.
 
-    Lays down two loadable files:
-
-    - `defs.bzl` (rules_py-native): the `group_deps()` and `group_deps_for()`
-      helpers plus the `compatible_with` / `incompatible_with` constraint
-      helpers and the `VIRTUALENVS` list.
-    - `requirements.bzl`: a rules_python-compatibility shim (`all_requirements`,
-      `requirement()`, and friends).
-
-    `group_deps()` returns the dependency list for whichever dependency group
-    the consuming target selects via its `dep_group` attribute. A hub spanning
-    multiple projects has an `all_requirements` union whose members are
-    incompatible under any single `dep_group`; `group_deps()` resolves instead
-    to just the subset valid for the active group. Because `dep_group` drives an
-    incoming transition, the returned `select()` is evaluated under the chosen
-    group, so it is used directly without repeating the group name:
-
-        deps = group_deps()
-
-    It is a function rather than a value so that future options -- such as
-    PEP 508 package extras -- can be added as keyword arguments without breaking
-    callers.
-
-    `group_deps_for(name)` returns the membership of one explicit group as
-    sorted `Label` values, for macros that must inspect package names (via
-    `Label.package`) during package loading or deliberately pin one group's
-    deps. The aliases still resolve under the active `dep_group`, so a consuming
-    target that uses these labels as `deps` must set the matching group itself.
-    It is the only public accessor for the per-group membership; the underlying
-    table is built once at load and shared with the `group_deps()` select.
+    - `compatibility.bzl`: environment names and compatibility helpers.
+    - `//dep_group:deps/<group>.bzl`: the ordered list of package Labels for
+      the named group, exported as `DEPS`. Set the consuming target's
+      `dep_group` to select matching wheel implementations.
+    - `requirements.bzl`: the rules_python-compatible hub-wide requirements.
     """,
     implementation = _hub_impl,
     attrs = {
-        "configurations": attr.string_dict(
-            doc = """
-            Mapping of configuration name to a project _containing_ that configuration.
-            """,
+        "configurations": attr.string_keyed_label_dict(
+            doc = "Project wheel-index label for each dependency group.",
         ),
-        "packages": attr.string(
-            doc = """
-            JSON blob mapping packages to configurations to projects.
-            """,
-        ),
-        "testonly_packages": attr.string(default = "{}"),
+        "packages": attr.string_list_dict(doc = "Sorted dependency groups containing each distribution."),
+        "testonly_packages": attr.string_list(),
     },
 )

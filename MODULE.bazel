@@ -156,6 +156,8 @@ use_repo(
     uv,
     "aspect_rules_py_pip_configurations",
     "project__aspect_rules_py",
+    "project__aspect_rules_py__distribution_cowsay",
+    "project__aspect_rules_py__marker_62",
     "pypi",
     "sdist_build__aspect_rules_py__bravado__11_0_3",
     "sdist_build__aspect_rules_py__bravado_core__6_1_1",

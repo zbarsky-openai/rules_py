@@ -124,16 +124,8 @@ def _whl_install_impl(repository_ctx):
     Args:
         repository_ctx: The repository context.
     """
-    prebuilds = json.decode(repository_ctx.attr.whls)
-    # Prebuilds is a mapping from whl file name to repo labels which contain
-    # that file. We need to take these wheel files and parse out compatibility.
-    #
-    # This is complicated by Starlark as with Python not treating lists as
-    # values, so we have to go to strings of JSON in order to get value
-    # semantics which is frustrating.
-
-    # The strategy here is to roll through the wheels,
-    select_arms = {}
+    prebuilds = repository_ctx.attr.whls
+    wheel_by_triple = {}
     content = [
         "load(\"@aspect_rules_py//py:defs.bzl\", \"py_library\")",
         "load(\"@aspect_rules_py//uv/private/whl_install:defs.bzl\", \"select_chain\")",
@@ -144,7 +136,8 @@ def _whl_install_impl(repository_ctx):
     # abi3 wheels claim the same (compatible_python, platform, abi) key —
     # e.g. cp38-abi3 and cp311-abi3 both expand into cp312+ — the wheel
     # with the higher source minor must win, regardless of iteration order.
-    for whl, target in prebuilds.items():
+    for whl, label in prebuilds.items():
+        target = str(label)
         parsed = parse_whl_name(whl)
 
         # FIXME: Make it impossible to generate absurd combinations such as
@@ -163,48 +156,16 @@ def _whl_install_impl(repository_ctx):
                             continue
 
                         key = (compatible_python_tag, platform_tag, abi_tag)
-                        existing = select_arms.get(key)
+                        existing = wheel_by_triple.get(key)
                         if existing == None or specificity > existing[0]:
-                            select_arms[key] = (specificity, target)
+                            wheel_by_triple[key] = (specificity, target)
 
-    # Strip the bookkeeping specificity score; downstream only needs the target.
-    select_arms = {k: v[1] for k, v in select_arms.items()}
-
-    # Unfortunately the way that Bazel decides ambiguous selects is explicitly
-    # NOT designed to allow for the implementation of ranges. Because that would
-    # be too easy. The disambiguation criteria is based on the number of
-    # ultimately matching ground conditions, with the most matching winning. No
-    # attention is paid to "how far away" those conditions may be down a select
-    # chain, for instance down a range ladder.
-    #
-    # So we have to implement a select with ordering ourselves by testing one
-    # condition at a time and taking the first mapped target for the first
-    # matching condition.
-    #
-    # But how do we put all the potential options in an order such that the
-    # first match is also the most relevant or newest match? We don't want to
-    # take a build which targets glibc 2.0 forever for instance.
-    #
-    # The answer is that we have to apply a sorting logic. Specifically we need
-    # to sort the platform.
-    #
-    # The wheel files -> targets pairs come in sorted descending order here, and
-    # the wheel name parser reports the annotations also in sorted descending
-    # order. So it happens that we SHOULD have the correct behavior here because
-    # our insertion order into the select arms dict follows the required
-    # newest-match order, but more assurance would be an improvement.
-    #
-    # Sort triples
-    select_arms = sort_select_arms(select_arms)
-
-    # FIXME: Insert the sbuild if it exists with an sbuild config flag as the
-    # first condition so that the user can force the build to use _only_ sbuilds
-    # if available (or transition a target to mandate sbuild).
-
-    # Convert triples to conditions
+    # select_chain uses the first matching condition. Keep more specific wheels
+    # first when platform versions or compatibility tags overlap.
+    configurations = repository_ctx.attr.wheel_configurations
     select_arms = {
-        "@aspect_rules_py_pip_configurations//:{}-{}-{}".format(*k): v
-        for k, v in select_arms.items()
+        str(configurations.same_package_label("-".join(triple))): target
+        for triple, (_, target) in sort_select_arms(wheel_by_triple).items()
     }
 
     sbuild_target = str(repository_ctx.attr.sbuild) if repository_ctx.attr.sbuild else None
@@ -358,7 +319,8 @@ exports_files(
 whl_install = repository_rule(
     implementation = _whl_install_impl,
     attrs = {
-        "whls": attr.string(),
+        "whls": attr.string_keyed_label_dict(),
+        "wheel_configurations": attr.label(mandatory = True),
         "sbuild": attr.label(),
         "sbuild_console_scripts": attr.string_list(),
         "sbuild_console_scripts_override": attr.bool(),

@@ -212,10 +212,10 @@ def _sdist_build_impl(repository_ctx):
         packages, graph = exclude_build_dep(
             build_deps["packages"],
             build_deps["scc_graph"],
-            repository_ctx.attr.package_install,
+            str(repository_ctx.attr.package_install),
         )
     without_self = {
-        name: "@{}//private/build_deps:{}".format(repository_ctx.original_name, name)
+        name: "@@{}//private/build_deps:{}".format(repository_ctx.name, name)
         for name in packages
     }
     available_deps.update(without_self)
@@ -446,8 +446,8 @@ sdist_build = repository_rule(
         "dependency_records": attr.label(
             doc = "Project BUILD file locating per-requirement records for the bundled configure tool.",
         ),
-        "package_install": attr.string(
-            doc = "Exact install label of the package being built; required with build_deps_file.",
+        "package_install": attr.label(
+            doc = "Install to exclude from this source distribution's build dependencies.",
         ),
         "is_native": attr.string(default = "auto", values = ["auto", "true", "false"]),
         "configure_interpreter": attr.label(

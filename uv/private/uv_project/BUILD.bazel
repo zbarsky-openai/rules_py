@@ -28,5 +28,8 @@ bzl_library(
 bzl_library(
     name = "select_gen",
     srcs = ["select_gen.bzl"],
-    deps = ["//uv/private/pprint:defs"],
+    deps = [
+        "@bazel_lib//lib:base64",
+        "//uv/private/pprint:defs",
+    ],
 )

@@ -1,62 +1,95 @@
 load("//uv/private/pprint:defs.bzl", "indent", "pprint")
-load("//uv/private/uv_project:build_deps.bzl", "write_build_dep_records", "write_build_deps")
-load("//uv/private/uv_project:select_gen.bzl", "EMPTY_LIBRARY", "build_package_select_arms", "conditional_dep", "marker_interner", "safe_name", "write_markers")
+load("//uv/private/uv_project:build_deps.bzl", "BUILD_DEPS_LOAD", "PY_LIBRARY_LOAD", "render_build_deps", "write_build_dep_records")
+load("//uv/private/uv_project:select_gen.bzl", "EMPTY_LIBRARY", "MARKERS_LOAD", "MARKER_BUCKET_COUNT", "build_package_select_arms", "conditional_dep", "marker_bucket", "marker_declaration", "marker_interner", "marker_name", "project_package_label", "select_alias")
 
-def _project_impl(repository_ctx):
-    """Materializes the dependency graph for a single project.
+def _add_aliases(content, package, cfgs, installs_by_scc, owners, testonly, _marker):
+    content.append("""
+# {}
+{}
+""".format(package, indent(pprint(cfgs), "# ")))
+    main_arms = {}
+    whl_main_arms = {}
 
-    Attrs:
-        dep_to_scc:   {package: {cfg: {scc: {marker: 1}}}}
-        scc_deps:     {scc: {package or absolute label: {marker: 1}}}
-        scc_graph:    {scc: {install: {marker: 1}}}
-    """
+    # FIXME: Handle markers for distinct versions
+    for cfg, scc_cfgs in cfgs.items():
+        cfg_name = "_package_{}_{}".format(package, cfg)
+        whl_cfg_name = cfg_name + "_whl"
+        cfg_label = "//private/dep_group:" + cfg
+        main_arms[cfg_label] = ":" + cfg_name
+        whl_main_arms[cfg_label] = ":" + whl_cfg_name
 
-    # Styleguide; string append via `+=` is inefficient. Prefer to use a list as
-    # a pseudo string builder buffer and a single final "\n".join(content) to
-    # materialize the buffer to a final writable string.
+        cfg_arms, whl_cfg_arms = build_package_select_arms(
+            scc_cfgs = scc_cfgs,
+            installs_by_scc = installs_by_scc,
+            package = package,
+            marker_fn = _marker,
+            scc_owners = owners,
+        )
+        content.append(select_alias(cfg_name, cfg_arms, "//visibility:private", testonly))
+        content.append(select_alias(whl_cfg_name, whl_cfg_arms, "//visibility:private"))
 
-    # Styleguide: Address each layer of aliases sequentially. Each layer should
-    # begin with a comment explaining what faimily of BUILD.bazel files will be
-    # generated, and end with the required `repository_ctx.file(path, content)`
-    # call.
+    content.append(select_alias(package, main_arms, "//visibility:public", testonly))
+    content.append(select_alias(package + "_whl", whl_main_arms, "//visibility:public"))
 
-    # These are provided as JSON strings and must be decoded.
-    dep_to_scc = json.decode(repository_ctx.attr.dep_to_scc)
-    scc_deps = json.decode(repository_ctx.attr.scc_deps)
-    scc_graph = json.decode(repository_ctx.attr.scc_graph)
-    build_deps = json.decode(repository_ctx.attr.build_deps_json) if repository_ctx.attr.build_deps_json else None
-    testonly_packages = json.decode(repository_ctx.attr.testonly_packages)
-    testonly_sccs = {
-        scc: True
-        for package, cfgs in dep_to_scc.items()
-        if package in testonly_packages
-        for sccs in cfgs.values()
-        for scc in sccs
-    }
+def _add_component(content, scc_id, members, this_scc_deps, testonly, _marker):
+    deps = []
+    content.append("""
+# scc: {}
+# members:
+{}
+# deps:
+{}
+""".format(scc_id, indent(pprint(members), "# "), indent(pprint(this_scc_deps), "# ")))
 
-    # Collect all the underlying whl installs
-    installs = {}
-    for scc_installs in scc_graph.values():
-        for install in scc_installs:
-            installs[install] = 1
+    for i, (member, markers) in enumerate(members.items()):
+        deps.append(conditional_dep(
+            content,
+            member,
+            markers,
+            "_maybe__{}__member_{}".format(scc_id, i),
+            _marker,
+            "//private/sccs:empty",
+            testonly = testonly,
+        ))
 
-    # As we go for simplicity we collect markers
-    marker_table = {}
-    _marker = marker_interner(marker_table)
+    # SCC deps are mapped back to surface packages
+    for i, (dep, markers) in enumerate(this_scc_deps.items()):
+        deps.append(conditional_dep(
+            content,
+            dep if dep.startswith("@") or dep.startswith("//") else project_package_label(dep),
+            markers,
+            "_maybe__{}__dep_{}".format(scc_id, i),
+            _marker,
+            "//private/sccs:empty",
+            testonly = testonly,
+        ))
 
-    ################################################################################
-    # Lay down the //private/dep_group:BUILD.bazel file with config flags
-    #
-    # This mirrors the uv_hub's dep_group, but is internal to the project.
+    content.append("""
+py_library(
+    name = "{name}",{testonly}
+    deps = {deps},
+    visibility = ["//:__subpackages__"],
+)
+""".format(
+        name = "_scc__" + scc_id,
+        deps = indent(pprint(deps), " " * 4).lstrip(),
+        testonly = "\n    testonly = True," if testonly else "",
+    ))
+
+def _distribution(data, refs):
+    content = []
+    _marker = marker_interner({})
+    if "cfgs" in data:
+        installs = {component: str(refs.get(label, label)) for component, label in data["installs"].items()}
+        _add_aliases(content, data["name"], data["cfgs"], installs, data["owners"], data["testonly"], _marker)
+    for scc_id, (members, deps, testonly) in data["components"].items():
+        _add_component(content, scc_id, _canonical_keys(members, refs), _canonical_keys(deps, refs), testonly, _marker)
+    return content
+
+def _dep_groups(groups):
     venv_content = []
 
-    # Collect all unique cfgs first
-    all_cfgs = set()
-    for dep, cfgs in dep_to_scc.items():
-        for cfg in cfgs.keys():
-            all_cfgs.add(cfg)
-
-    for cfg_name in all_cfgs:
+    for cfg_name in groups:
         venv_content.append(
             """
 config_setting(
@@ -68,83 +101,32 @@ config_setting(
 )
 """.format(name = cfg_name),
         )
-    repository_ctx.file("private/dep_group/BUILD.bazel", content = "\n".join(venv_content))
+    return venv_content
 
-    ################################################################################
-    # Lay down the surface-level targets
-    content = ["""\
-# Fallback for `:{package}_whl` aliases on workspace / editable packages
-# (which have no underlying whl_install repo to point at).
-filegroup(
+def _surface(packages, testonly_packages, installs):
+    root_content = []
+    for package in packages:
+        root_content.append("""
+alias(
+    name = "{name}",{testonly}
+    actual = "{actual}",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "{name}_whl",
+    actual = "{actual}_whl",
+    visibility = ["//visibility:public"],
+)
+""".format(name = package, actual = project_package_label(package), testonly = "\n    testonly = True," if package in testonly_packages else ""))
+
+    root_content.append("""
+alias(
     name = "empty_whl",
-    srcs = [],
+    actual = "//private/sccs:empty_whl",
     visibility = ["//visibility:public"],
 )
 
-"""]
-    for package, cfgs in dep_to_scc.items():
-        content.append("""
-# {}
-{}
-""".format(package, indent(pprint(cfgs), "# ")))
-        main_arms = {}
-        whl_main_arms = {}
-        testonly_attr = "\n    testonly = True," if package in testonly_packages else ""
-
-        # FIXME: Handle markers for distinct versions
-        for cfg, scc_cfgs in cfgs.items():
-            cfg_name = "_package_{}_{}".format(package, cfg)
-            main_arms["//private/dep_group:" + cfg] = ":" + cfg_name
-
-            whl_cfg_name = "_package_{}_{}_whl".format(package, cfg)
-
-            cfg_arms, whl_cfg_arms = build_package_select_arms(
-                scc_cfgs = scc_cfgs,
-                scc_graph = scc_graph,
-                package = package,
-                marker_fn = _marker,
-            )
-
-            content.append("""
-alias(
-    name = "{name}",{testonly}
-    actual = select({arms}),
-    visibility = ["//visibility:private"],
-)
-""".format(name = cfg_name, arms = indent(pprint(cfg_arms), " " * 4).lstrip(), testonly = testonly_attr))
-            whl_main_arms["//private/dep_group:" + cfg] = ":" + whl_cfg_name
-            content.append("""
-alias(
-    name = "{name}",
-    actual = select({arms}),
-    visibility = ["//visibility:private"],
-)
-""".format(name = whl_cfg_name, arms = indent(pprint(whl_cfg_arms), " " * 4).lstrip()))
-
-        content.append("""
-alias(
-    name = "{name}",{testonly}
-    actual = select({arms}),
-    visibility = ["//visibility:public"],
-)
-""".format(
-            name = package,
-            arms = indent(pprint(main_arms), " " * 4).lstrip(),
-            testonly = testonly_attr,
-        ))
-
-        content.append("""
-alias(
-    name = "{name}",
-    actual = select({arms}),
-    visibility = ["//visibility:public"],
-)
-""".format(
-            name = package + "_whl",
-            arms = indent(pprint(whl_main_arms), " " * 4).lstrip(),
-        ))
-
-    content.append("""
 filegroup(
     name = "gazelle_index_whls",
     srcs = {gazelle_whls},
@@ -159,92 +141,303 @@ exports_files(
         gazelle_whls = indent(pprint([it.replace("//:install", "//:whl") for it in installs]), " " * 4).lstrip(),
     ))
 
-    repository_ctx.file("BUILD.bazel", "\n".join(content))
-    if repository_ctx.attr.available_deps_json:
-        repository_ctx.file("available_deps.json", repository_ctx.attr.available_deps_json)
-    if repository_ctx.attr.build_deps_json:
-        repository_ctx.file("build_deps.json", repository_ctx.attr.build_deps_json)
-        write_build_dep_records(repository_ctx, json.decode(repository_ctx.attr.available_deps_json), build_deps)
+    return root_content
 
-    ################################0################################################
-    # Now the slightly harder bit -- lay down the SCCs
-
-    content = [EMPTY_LIBRARY]
-
-    for scc_id, members in scc_graph.items():
-        this_scc_deps = scc_deps.get(scc_id, {})
-        deps = []
-        content.append("""
-# scc: {}
-# members:
-{}
-# deps:
-{}
-""".format(scc_id, indent(pprint(members), "# "), indent(pprint(this_scc_deps), "# ")))
-
-        for i, (member, markers) in enumerate(members.items()):
-            deps.append(conditional_dep(
-                content,
-                member,
-                markers,
-                "_maybe__{}__member_{}".format(scc_id, i),
-                _marker,
-                ":empty",
-                testonly = scc_id in testonly_sccs,
-            ))
-
-        # SCC deps are mapped back to surface packages
-        for i, (dep, markers) in enumerate(this_scc_deps.items()):
-            deps.append(conditional_dep(
-                content,
-                dep if dep.startswith("@") or dep.startswith("//") else "//:" + dep,
-                markers,
-                "_maybe__{}__dep_{}".format(scc_id, i),
-                _marker,
-                ":empty",
-                testonly = scc_id in testonly_sccs,
-            ))
-
-        content.append("""
-py_library(
-    name = "{name}",{testonly}
-    deps = {deps},
-    visibility = ["//:__subpackages__"],
-)
-""".format(
-            name = scc_id,
-            deps = indent(pprint(deps), " " * 4).lstrip(),
-            testonly = "\n    testonly = True," if scc_id in testonly_sccs else "",
-        ))
-
-    content.append("""
-exports_files(
-    ["BUILD.bazel"],
+_EMPTY_BUILD = EMPTY_LIBRARY + """
+filegroup(
+    name = "empty_whl",
     visibility = ["//visibility:public"],
 )
-""")
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
+"""
 
-    repository_ctx.file("private/sccs/BUILD.bazel", "\n".join(content))
+def _partition_build_deps(build, distributions, owners):
+    # Source frontends normally use the selected requirement and its dependency
+    # components. The project-level aggregate files remain available separately.
+    packages = build["packages"]
+    prefix = "//private/build_deps/sccs:"
 
-    ################################################################################
-    # Build requirements have their own graph, independent of runtime groups.
-    if build_deps != None:
-        write_build_deps(repository_ctx, build_deps["packages"], build_deps["scc_graph"], marker_fn = _marker)
+    def build_label(label):
+        if not label.startswith(prefix):
+            return label
+        component = label[len(prefix):]
+        if component not in build["scc_graph"]:
+            return label
+        return "//private/build_deps/packages/{}:_scc__{}".format(owners[component], component)
 
-    ################################################################################
-    # Finally lay down the collected markers
-    write_markers(repository_ctx, marker_table)
+    def part(name):
+        distribution = distributions.setdefault(name, {"components": {}})
+        return distribution.setdefault("build", {"packages": {}, "scc_graph": {}})
 
-    return repository_ctx.repo_metadata(reproducible = True)
+    for name, candidates in packages.items():
+        part(name)["packages"][name] = [
+            {"markers": c["markers"], "deps": [build_label(dep) for dep in c["deps"]]}
+            for c in candidates
+        ]
+    for component, deps in build["scc_graph"].items():
+        part(owners[component])["scc_graph"]["_scc__" + component] = {build_label(label): markers for label, markers in deps.items()}
 
-uv_project = repository_rule(
-    implementation = _project_impl,
+def partition_project(dep_to_scc, scc_graph, scc_deps, testonly_packages, build_deps, build_component_owners):
+    """Partition the project graph into the inputs for each generated repository."""
+    owners = {}
+    testonly_sccs = {}
+    all_cfgs = {}
+    exprs = {}
+    names = sorted(dep_to_scc)
+    distributions = {}
+    for name in names:
+        cfgs = dep_to_scc[name]
+        testonly = name in testonly_packages
+        package_owners = {}
+
+        # The first distribution in lexical order owns the shared component.
+        for cfg, components in cfgs.items():
+            all_cfgs[cfg] = True
+            for component, markers in components.items():
+                package_owners[component] = owners.setdefault(component, name)
+                if testonly:
+                    testonly_sccs[component] = True
+                if "" not in markers:
+                    exprs.update(markers)
+
+        distributions[name] = {
+            "name": name,
+            "cfgs": cfgs,
+            "testonly": testonly,
+            "owners": package_owners,
+            # Avoid copying every member of a shared cycle into each spec.
+            "installs": {},
+            "components": {},
+        }
+    index_installs = {}
+    for component in sorted(scc_graph):
+        members = {}
+
+        # Preserve lexical preference if a cycle contains two versions of a package.
+        for install, package, markers in sorted(scc_graph[component], key = lambda member: member[0]):
+            members[install] = markers
+            if package in dep_to_scc and component in distributions[package]["owners"]:
+                distributions[package]["installs"].setdefault(component, install)
+        index_installs.update(members)
+        owner = owners.get(component, "_unselected")
+        distribution = distributions.setdefault(owner, {"components": {}})
+        deps = scc_deps.get(component, {})
+        distribution["components"][component] = [members, deps, component in testonly_sccs]
+        for edges in (members, deps):
+            for markers in edges.values():
+                if "" not in markers:
+                    exprs.update(markers)
+
+    if build_deps:
+        _partition_build_deps(build_deps, distributions, build_component_owners)
+        for members in build_deps["scc_graph"].values():
+            for markers in members.values():
+                if "" not in markers:
+                    exprs.update(markers)
+        for candidates in build_deps["packages"].values():
+            for candidate in candidates:
+                for expr in candidate["markers"]:
+                    if expr:
+                        exprs[expr] = True
+    return struct(
+        distributions = distributions,
+        groups = sorted(all_cfgs),
+        index_installs = list(index_installs),
+        exprs = sorted(exprs),
+        names = names,
+    )
+
+def _module(ctx, path, loads, declarations):
+    # Legacy macros instantiate in the public project's package. In particular
+    # its repository is still the owner used by PyInfo imports and runfiles.
+    body = "\n".join(declarations).strip()
+    lines = ["    " + line if line else "" for line in body.splitlines()] if body else ["    pass"]
+    ctx.file(path, loads + """
+alias = native.alias
+config_setting = native.config_setting
+exports_files = native.exports_files
+filegroup = native.filegroup
+
+def define():
+""" + "\n".join(lines) + "\n")
+
+def _label_refs(labels):
+    # Convert generated apparent labels when the extension declares the repository.
+    # Legacy macros instantiate in the public project. A member's install label
+    # must not introduce that install into the public project's repository map.
+    return {label: label for label in sorted(labels) if label.startswith("@") and not label.startswith("@@")}
+
+def _canonical_keys(values, refs):
+    return {str(refs.get(k, k)): v for k, v in values.items()}
+
+def _build_labels(graph):
+    labels = {label: True for deps in graph["scc_graph"].values() for label in deps}
+    labels.update({label: True for candidates in graph["packages"].values() for candidate in candidates for label in candidate["deps"]})
+    return labels
+
+def _resolve_build_labels(graph, refs):
+    for candidates in graph["packages"].values():
+        for candidate in candidates:
+            candidate["deps"] = [str(refs.get(label, label)) for label in candidate["deps"]]
+    graph["scc_graph"] = {key: _canonical_keys(deps, refs) for key, deps in graph["scc_graph"].items()}
+
+def _member_impl(ctx):
+    data = json.decode(ctx.attr.data)
+    refs = ctx.attr.refs
+    _module(ctx, "defs.bzl", PY_LIBRARY_LOAD, _distribution(data, refs))
+    ctx.file("BUILD.bazel", 'exports_files(["defs.bzl"])')
+    if "build" in data:
+        graph = data["build"]
+        _resolve_build_labels(graph, refs)
+        decls = render_build_deps(graph["packages"], graph["scc_graph"], marker_interner({}))
+        _module(ctx, "build.bzl", BUILD_DEPS_LOAD, decls.components + decls.requirements)
+    return ctx.repo_metadata(reproducible = True)
+
+_member = repository_rule(implementation = _member_impl, attrs = {"data": attr.string(), "refs": attr.string_keyed_label_dict()})
+
+def _marker_repo_impl(ctx):
+    exprs = ctx.attr.exprs
+    _module(ctx, "defs.bzl", MARKERS_LOAD if exprs else "", [
+        marker_declaration(marker_name(expr), expr)
+        for expr in exprs
+    ])
+    ctx.file("BUILD.bazel", 'exports_files(["defs.bzl"])')
+    return ctx.repo_metadata(reproducible = True)
+
+_marker_repo = repository_rule(implementation = _marker_repo_impl, attrs = {"exprs": attr.string_list()})
+
+def _surface_impl(ctx):
+    testonly_packages = {name: True for name in ctx.attr.testonly_packages}
+    _module(ctx, "defs.bzl", "", _surface(ctx.attr.packages, testonly_packages, [str(label) for label in ctx.attr.installs]))
+    ctx.file("BUILD.bazel", 'exports_files(["defs.bzl"])')
+    return ctx.repo_metadata(reproducible = True)
+
+_surface_repo = repository_rule(
+    implementation = _surface_impl,
     attrs = {
-        "available_deps_json": attr.string(),
-        "build_deps_json": attr.string(),
-        "dep_to_scc": attr.string(),
-        "scc_deps": attr.string(),
-        "scc_graph": attr.string(),
-        "testonly_packages": attr.string(default = "{}"),
+        "installs": attr.label_list(),
+        "packages": attr.string_list(),
+        "testonly_packages": attr.string_list(),
     },
 )
+
+def _groups_impl(ctx):
+    _module(ctx, "defs.bzl", "", _dep_groups(ctx.attr.groups))
+    ctx.file("BUILD.bazel", 'exports_files(["defs.bzl"])')
+    return ctx.repo_metadata(reproducible = True)
+
+_groups_repo = repository_rule(implementation = _groups_impl, attrs = {"groups": attr.string_list()})
+
+def _build_graph_impl(ctx):
+    graph = json.decode(ctx.attr.graph)
+    available = {
+        name: "@@{0}//private/build_deps/packages/{1}:{1}".format(ctx.attr.project.repo_name, name)
+        for name in graph["packages"]
+    }
+    _resolve_build_labels(graph, ctx.attr.refs)
+    ctx.file("build_deps.json", json.encode(graph))
+    ctx.file("available_deps.json", json.encode(available))
+    write_build_dep_records(ctx, available, graph)
+
+    decls = render_build_deps(graph["packages"], graph["scc_graph"], marker_interner({}))
+    _module(ctx, "components.bzl", PY_LIBRARY_LOAD + "\n", decls.components)
+    _module(ctx, "packages.bzl", BUILD_DEPS_LOAD + "\n", decls.requirements)
+    ctx.file("BUILD.bazel", 'exports_files(["available_deps.json", "build_deps.json", "components.bzl", "packages.bzl"])')
+    return ctx.repo_metadata(reproducible = True)
+
+_build_graph = repository_rule(
+    implementation = _build_graph_impl,
+    attrs = {"project": attr.label(), "graph": attr.string(), "refs": attr.string_keyed_label_dict()},
+)
+
+def _stub(source):
+    return 'load("{}", "define")\n\ndefine()\n'.format(source)
+
+def _facade_impl(ctx):
+    # BUILD files must work when Bazel restores just this repository from its
+    # contents cache. A Starlark load asks Bazel to fetch the referenced member.
+    for name, member in ctx.attr.members.items():
+        ctx.file(
+            "private/distributions/{}/BUILD.bazel".format(name),
+            _stub("@@{}//:defs.bzl".format(member.repo_name)),
+        )
+    for name in ctx.attr.build_members:
+        ctx.file(
+            "private/build_deps/packages/{}/BUILD.bazel".format(name),
+            _stub("@@{}//:build.bzl".format(ctx.attr.members[name].repo_name)),
+        )
+
+    def backing(suffix, target = "defs.bzl"):
+        return "@@{}//:{}".format(ctx.attr.backings[suffix].repo_name, target)
+
+    for i in range(MARKER_BUCKET_COUNT):
+        ctx.file("private/markers/{}/BUILD.bazel".format(i), _stub(backing("marker_{}".format(i))))
+    root = _stub(backing("surface"))
+    if "build_graph" in ctx.attr.backings:
+        for path in ["available_deps.json", "build_deps.json"]:
+            root += 'alias(name = "{}", actual = "{}", visibility = ["//visibility:public"])\n'.format(path, backing("build_graph", path))
+        ctx.file("private/build_deps/BUILD.bazel", _stub(backing("build_graph", "packages.bzl")))
+        ctx.file("private/build_deps/sccs/BUILD.bazel", _stub(backing("build_graph", "components.bzl")))
+    ctx.file("BUILD.bazel", root)
+    ctx.file("private/sccs/BUILD.bazel", _EMPTY_BUILD)
+    ctx.file("private/dep_group/BUILD.bazel", _stub(backing("groups")))
+    return ctx.repo_metadata(reproducible = True)
+
+_facade = repository_rule(
+    implementation = _facade_impl,
+    attrs = {
+        "backings": attr.string_keyed_label_dict(),
+        "members": attr.string_keyed_label_dict(),
+        "build_members": attr.string_list(),
+    },
+)
+
+def declare_project(name, build_deps, dep_to_scc, scc_deps, scc_graph, build_component_owners, testonly_packages = {}):
+    """Declare lazy dependency repositories plus the project's stable Bazel package entry points."""
+    parts = partition_project(dep_to_scc, scc_graph, scc_deps, testonly_packages, build_deps, build_component_owners)
+    backings = {}
+
+    def backing(suffix):
+        repo = name + "__" + suffix
+        backings[suffix] = "@" + repo + "//:BUILD.bazel"
+        return repo
+
+    members = {}
+    build_members = []
+    for member in sorted(parts.distributions):
+        data = parts.distributions[member]
+        labels = {label: True for label in data.get("installs", {}).values()}
+        for installs, deps, _ in data["components"].values():
+            labels.update(installs)
+            labels.update(deps)
+        if "build" in data:
+            build_members.append(member)
+            labels.update(_build_labels(data["build"]))
+        repo = name + "__distribution_" + member
+        members[member] = "@" + repo + "//:BUILD.bazel"
+        _member(
+            name = repo,
+            data = json.encode(data),
+            refs = _label_refs(labels),
+        )
+
+    buckets = {}
+    for expr in parts.exprs:
+        buckets.setdefault(marker_bucket(expr), []).append(expr)
+    for i in range(MARKER_BUCKET_COUNT):
+        _marker_repo(name = backing("marker_{}".format(i)), exprs = buckets.get(i, []))
+    _surface_repo(name = backing("surface"), packages = parts.names, testonly_packages = sorted(testonly_packages), installs = parts.index_installs)
+    _groups_repo(name = backing("groups"), groups = parts.groups)
+    if build_deps != None:
+        _build_graph(
+            name = backing("build_graph"),
+            project = "@" + name + "//:BUILD.bazel",
+            graph = json.encode(build_deps),
+            refs = _label_refs(_build_labels(build_deps)),
+        )
+    _facade(
+        name = name,
+        backings = backings,
+        members = members,
+        build_members = build_members,
+    )

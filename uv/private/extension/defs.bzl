@@ -63,7 +63,8 @@ load("//uv/private/sdist_build:attrs.bzl", "validate_build_attrs")
 load("//uv/private/sdist_build:repository.bzl", "sdist_build")
 load("//uv/private/tomltool:toml.bzl", "toml")
 load("//uv/private/uv_hub:repository.bzl", "uv_hub")
-load("//uv/private/uv_project:repository.bzl", "uv_project")
+load("//uv/private/uv_project:repository.bzl", "declare_project")
+load("//uv/private/uv_project:select_gen.bzl", "project_package_label")
 load("//uv/private/whl_install:dist_repository.bzl", "whl_dist")
 load("//uv/private/whl_install:metadata.bzl", "parse_console_script")
 load("//uv/private/whl_install:repository.bzl", "whl_install")
@@ -235,8 +236,7 @@ def _parse_projects(module_ctx, hub_specs):
     Returns:
         A struct of the inputs consumed by `_uv_impl`, with fields:
 
-          - project_cfgs: `{project_id -> {dep_to_scc, scc_deps, scc_graph}}`
-            graph data, JSON-encoded downstream.
+          - project_cfgs: arguments for declare_project, keyed by project id.
           - hub_cfgs: `{hub_name -> {configurations, packages}}` aggregated
             per-hub configuration/package surface.
           - install_cfgs: `{whl_install key -> install struct}` wiring each
@@ -545,23 +545,7 @@ def _parse_projects(module_ctx, hub_specs):
                     if not changed:
                         break
 
-            # Pre-build the per-project available_deps mapping from the
-            # lockfile. This gives each sdist configure tool visibility
-            # into the packages within this project's dependency perimeter.
-            project_available_deps = {}
-            build_package_keys = {}
             project_has_sbuilds = False
-            for package in lock_data.get("package", []):
-                if "editable" in package.get("source", {}) or "virtual" in package.get("source", {}):
-                    continue
-                pkg_name = normalize_name(package["name"])
-                package_key = (project_id, package["name"], package["version"], "__base__")
-                build_package_keys.setdefault(pkg_name, {}).setdefault(package_key, {}).update({
-                    marker: 1
-                    for marker in package.get("resolution-markers") or [""]
-                })
-                project_available_deps[pkg_name] = "@{}//private/build_deps:{}".format(project_id, pkg_name)
-
             for package in lock_data.get("package", []):
                 install_key = (project_id, package["name"], package["version"], "__base__")
                 k = "whl_install__{}__{}__{}".format(project_stamp, package["name"], normalize_version(package["version"]))
@@ -676,9 +660,15 @@ def _parse_projects(module_ctx, hub_specs):
                         monitor_memory = pkg_override.monitor_memory
                         resource_set = pkg_override.resource_set
 
+                    build_dep_labels = []
+                    for dep in build_deps:
+                        dep_name = dep[1]
+                        label = project_package_label(dep_name) if dep_name in marked_package_cfg_sccs else "//:" + dep_name
+                        build_dep_labels.append("@" + project_id + label)
+
                     sbuild_specs[sbuild_id] = struct(
                         src = sdist,
-                        deps = ["@{0}//:{1}".format(*it) for it in build_deps],
+                        deps = build_dep_labels,
                         build_tool = build_tool,
                         is_native = is_native,
                         version = package["version"],
@@ -741,7 +731,18 @@ def _parse_projects(module_ctx, hub_specs):
             # neither is activated by the consuming project's dependency group.
             # Keep this graph separate from the runtime aliases and Gazelle index.
             project_build_deps = None
+            build_component_owners = {}
             if project_has_sbuilds:
+                build_package_keys = {}
+                for package in lock_data.get("package", []):
+                    if "editable" in package.get("source", {}) or "virtual" in package.get("source", {}):
+                        continue
+                    pkg_name = package["name"]
+                    package_key = (project_id, pkg_name, package["version"], "__base__")
+                    build_package_keys.setdefault(pkg_name, {}).setdefault(package_key, {}).update({
+                        marker: 1
+                        for marker in package.get("resolution-markers") or [""]
+                    })
                 build_dep_to_scc, build_scc_graph, build_scc_deps = collect_build_deps(replace_dependencies(marker_graph, replacement_deps))
                 build_packages = {
                     pkg_name: [
@@ -757,6 +758,12 @@ def _parse_projects(module_ctx, hub_specs):
                     for pkg_name, versions in build_package_keys.items()
                 }
 
+                # Activation-only and conditional entry components do not all
+                # have a base requirement. Keep their original logical owner.
+                build_component_owners = {
+                    component: min([key[1] for key in members])
+                    for component, members in build_scc_graph.items()
+                }
                 marked_build_scc_graph = map_scc_installs(build_scc_graph, install_table)
                 for scc_id, deps in build_scc_deps.items():
                     for dep, markers in deps.items():
@@ -768,14 +775,15 @@ def _parse_projects(module_ctx, hub_specs):
                     "scc_graph": marked_build_scc_graph,
                 }
 
-            # These structures are re-keyed into JSON-serializable shapes for the
-            # repo-rule boundary. Structured keys are preserved verbatim and
-            # re-parsed on the other side; mangling happens there as needed.
-            #
-            # FIXME: extract a re-keying helper.
-            project_cfgs[project_id] = struct(
-                available_deps = project_available_deps if project_has_sbuilds else None,
+            def wheel_package(member):
+                # A full replacement supplies a library, not a generated wheel target.
+                package = member[1]
+                override = package_overrides.get((package, member[2]))
+                return None if override and override.target != None else package
+
+            project_cfgs[project_id] = dict(
                 build_deps = project_build_deps,
+                build_component_owners = build_component_owners,
                 dep_to_scc = marked_package_cfg_sccs,
                 testonly_packages = testonly_packages,
                 scc_deps = {
@@ -783,12 +791,11 @@ def _parse_projects(module_ctx, hub_specs):
                     for k, deps in scc_deps.items()
                 },
                 scc_graph = {
-                    scc_id: {
-                        install_table[m]: markers
-                        for m, markers in members.items()
-                        # Extras etc. have no install table presence
-                        if m in install_table
-                    }
+                    scc_id: [
+                        (install_table[member], wheel_package(member), markers)
+                        for member, markers in members.items()
+                        if member in install_table
+                    ]
                     for scc_id, members in scc_graph.items()
                 },
             )
@@ -800,19 +807,14 @@ def _parse_projects(module_ctx, hub_specs):
             ))
             hub_cfg.testonly_packages.update(testonly_packages)
 
-            for cfg in configuration_names.keys():
+            project_index = "@" + project_id + "//:gazelle_index_whls"
+            for cfg in configuration_names:
                 if cfg in hub_cfg.configurations:
                     fail("Conflict on configuration name {} in hub {}".format(cfg, project.hub_name))
+                hub_cfg.configurations[cfg] = project_index
 
-            hub_cfg.configurations.update({
-                name: project_id
-                for name in configuration_names.keys()
-            })
-
-            # Build a {requirement: {cfg: target mapping}}
-            for package, cfgs in version_activations.items():
-                for cfg in cfgs.keys():
-                    hub_cfg.packages.setdefault(package, {})[cfg] = "@{}//:{}".format(project_id, package)
+            for package, groups in version_activations.items():
+                hub_cfg.packages.setdefault(package, []).extend(groups.keys())
 
         for i, override in enumerate(mod.tags.override_package):
             if override.lock == None and not unscoped_matches[i]:
@@ -829,41 +831,18 @@ def _parse_projects(module_ctx, hub_specs):
             "@{}//:install".format(dropped): "@{}//:install".format(canonical)
             for dropped, canonical in id_remap.items()
         }
-        project_cfgs = {
-            project_id: struct(
-                available_deps = pc.available_deps,
-                build_deps = {
-                    "packages": {
-                        package: [
-                            {
-                                "deps": [target_remap.get(target, target) for target in candidate["deps"]],
-                                "markers": candidate["markers"],
-                            }
-                            for candidate in candidates
-                        ]
-                        for package, candidates in pc.build_deps["packages"].items()
-                    },
-                    "scc_graph": {
-                        scc_id: {
-                            target_remap.get(target, target): markers
-                            for target, markers in members.items()
-                        }
-                        for scc_id, members in pc.build_deps["scc_graph"].items()
-                    },
-                } if pc.build_deps != None else None,
-                dep_to_scc = pc.dep_to_scc,
-                scc_deps = pc.scc_deps,
-                testonly_packages = pc.testonly_packages,
-                scc_graph = {
-                    scc_id: {
-                        target_remap.get(target, target): markers
-                        for target, markers in members.items()
-                    }
-                    for scc_id, members in pc.scc_graph.items()
-                },
-            )
-            for project_id, pc in project_cfgs.items()
-        }
+        for project_cfg in project_cfgs.values():
+            for members in project_cfg["scc_graph"].values():
+                for i, (install, package, markers) in enumerate(members):
+                    if install in target_remap:
+                        members[i] = (target_remap[install], package, markers)
+            build = project_cfg["build_deps"]
+            if build != None:
+                for candidates in build["packages"].values():
+                    for candidate in candidates:
+                        candidate["deps"] = [target_remap.get(label, label) for label in candidate["deps"]]
+                for component, members in build["scc_graph"].items():
+                    build["scc_graph"][component] = {target_remap.get(label, label): markers for label, markers in members.items()}
 
     return struct(
         project_cfgs = project_cfgs,
@@ -954,10 +933,11 @@ def _uv_impl(module_ctx):
     default_configure_interpreter = resolve_host_interpreter_label(module_ctx)
 
     for sbuild_id, sbuild_cfg in cfg.sbuild_cfgs.items():
+        build_graph = "@{}__build_graph//:".format(sbuild_cfg.project_id)
         sbuild_kwargs = {
             "name": sbuild_id,
-            "available_deps_file": "@{}//:available_deps.json".format(sbuild_cfg.project_id),
-            "build_deps_file": "@{}//:build_deps.json".format(sbuild_cfg.project_id),
+            "available_deps_file": build_graph + "available_deps.json",
+            "build_deps_file": build_graph + "build_deps.json",
             "package_install": sbuild_cfg.package_install,
             "src": sbuild_cfg.src,
             "deps": sbuild_cfg.deps,
@@ -969,7 +949,7 @@ def _uv_impl(module_ctx):
         if default_configure_interpreter:
             sbuild_kwargs["configure_interpreter"] = default_configure_interpreter
             if not sbuild_cfg.build_tool:
-                sbuild_kwargs["dependency_records"] = "@{}//:BUILD.bazel".format(sbuild_cfg.project_id)
+                sbuild_kwargs["dependency_records"] = build_graph + "BUILD.bazel"
 
         if sbuild_cfg.pre_build_patches:
             sbuild_kwargs["pre_build_patches"] = sbuild_cfg.pre_build_patches
@@ -991,7 +971,8 @@ def _uv_impl(module_ctx):
             "name": install_id,
             "sbuild": install_cfg.sbuild,
             "sbuild_console_scripts": install_cfg.sbuild_console_scripts or [],
-            "whls": json.encode(install_cfg.whls),
+            "whls": install_cfg.whls,
+            "wheel_configurations": "@aspect_rules_py_pip_configurations//:BUILD.bazel",
         }
         if install_cfg.sbuild_console_scripts != None:
             install_kwargs["sbuild_console_scripts_override"] = True
@@ -1009,22 +990,14 @@ def _uv_impl(module_ctx):
         whl_install(**install_kwargs)
 
     for project_id, project_cfg in cfg.project_cfgs.items():
-        uv_project(
-            name = project_id,
-            available_deps_json = json.encode(project_cfg.available_deps) if project_cfg.available_deps != None else "",
-            build_deps_json = json.encode(project_cfg.build_deps) if project_cfg.build_deps != None else "",
-            dep_to_scc = json.encode(project_cfg.dep_to_scc),
-            scc_deps = json.encode(project_cfg.scc_deps),
-            scc_graph = json.encode(project_cfg.scc_graph),
-            testonly_packages = json.encode(project_cfg.testonly_packages),
-        )
+        declare_project(name = project_id, **project_cfg)
 
     for hub_id, hub_cfg in cfg.hub_cfgs.items():
         uv_hub(
             name = hub_id,
             configurations = hub_cfg.configurations,
-            packages = json.encode(hub_cfg.packages),
-            testonly_packages = json.encode(hub_cfg.testonly_packages),
+            packages = {name: sorted(groups) for name, groups in hub_cfg.packages.items()},
+            testonly_packages = sorted(hub_cfg.testonly_packages),
         )
 
     return module_ctx.extension_metadata(reproducible = True)
