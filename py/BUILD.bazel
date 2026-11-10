@@ -1,5 +1,5 @@
 load("@bazel_lib//:bzl_library.bzl", "bzl_library")
-load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "int_flag")
 load("//py/private/interpreter:launcher.bzl", "py_interpreter_launcher")
 
 # Consumed by //docs:py_api (stardoc). exports_files gives the implicit .bzl file
@@ -12,6 +12,24 @@ exports_files(
 bool_flag(
     name = "experimental_indexed_imports",
     build_setting_default = True,
+    visibility = ["//visibility:public"],
+)
+
+bool_flag(
+    name = "precompile_first_party",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "is_precompile_first_party",
+    flag_values = {":precompile_first_party": "true"},
+    visibility = ["//visibility:public"],
+)
+
+int_flag(
+    name = "first_party_precompile_batch_size",
+    build_setting_default = 64,
     visibility = ["//visibility:public"],
 )
 

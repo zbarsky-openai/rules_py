@@ -4,6 +4,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 package(default_visibility = ["//py:__subpackages__"])
 
 exports_files([
+    "first_party_precompile.py",
     "import_index.py",
     "templates/_aspect_rules_py_import_index.py",
     "templates/console_script.tmpl.sh",

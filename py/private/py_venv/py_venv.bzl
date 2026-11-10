@@ -47,6 +47,99 @@ def _interpreter_flags(ctx):
 
     return args
 
+def _precompile_first_party(ctx, sources, target_runtime):
+    if not ctx.attr._first_party_precompile[BuildSettingInfo].value:
+        return ctx.runfiles()
+
+    # One import path can appear more than once in a transitive PyInfo depset.
+    # Distinct configured artifacts can share a runfiles path; only the venv
+    # knows which one is imported, so leave ambiguous paths uncompiled.
+    # Match the venv import index, which excludes runfiles paths starting ../.
+    first_party_sources = {}
+    for source in sources.to_list():
+        if not (
+            source.extension == "py" and
+            not source.short_path.startswith("../") and
+            source.owner != None and
+            source.owner.workspace_name == ctx.label.workspace_name
+        ):
+            continue
+        source_path = source.short_path
+        previous = first_party_sources.get(source_path)
+        if source_path in first_party_sources:
+            if previous != None and previous.path != source.path:
+                first_party_sources[source_path] = None
+            continue
+        first_party_sources[source_path] = source
+    first_party_sources = [source for source in first_party_sources.values() if source != None]
+    if not first_party_sources:
+        return ctx.runfiles()
+
+    batch_size = ctx.attr._first_party_precompile_batch_size[BuildSettingInfo].value
+    if batch_size < 1:
+        fail("first_party_precompile_batch_size must be positive")
+
+    exec_toolchain = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN]
+    if not exec_toolchain:
+        fail("first-party Python precompilation requires an execution Python toolchain")
+    exec_runtime = exec_toolchain.exec_runtime
+    if target_runtime.pyc_tag != exec_runtime.pyc_tag:
+        return ctx.runfiles()
+
+    bucket_count = (len(first_party_sources) + batch_size - 1) // batch_size
+    buckets = {}
+    for source in first_party_sources:
+        bucket = hash(source.short_path) % bucket_count
+        buckets.setdefault(bucket, []).append(source)
+
+    compiler_arguments = ctx.actions.args()
+    compiler_arguments.add(ctx.file._first_party_precompile_compiler)
+    runfile_symlinks = {}
+    for bucket, bucket_sources in sorted(buckets.items()):
+        ordered_sources = sorted(bucket_sources, key = lambda source: source.short_path)
+        for offset in range(0, len(ordered_sources), batch_size):
+            batch_sources = ordered_sources[offset:offset + batch_size]
+            outputs = []
+            arguments = ctx.actions.args()
+            arguments.use_param_file("@%s", use_always = True)
+            arguments.set_param_file_format("multiline")
+
+            for source in batch_sources:
+                source_path = source.short_path
+                directory, _, basename = source_path.rpartition("/")
+                cache_path = "{}__pycache__/{}.{}.pyc".format(
+                    directory + "/" if directory else "",
+                    basename[:-3],
+                    target_runtime.pyc_tag,
+                )
+                output = ctx.actions.declare_file("{}.pyc/{}".format(ctx.label.name, cache_path))
+                outputs.append(output)
+                runfile_symlinks[cache_path] = output
+                arguments.add_all(["--source", source, output, source_path])
+
+            ctx.actions.run(
+                mnemonic = "PrecompileFirstPartyPython",
+                executable = exec_runtime.interpreter,
+                arguments = [compiler_arguments, arguments],
+                inputs = depset(
+                    direct = batch_sources + [
+                        ctx.file._first_party_precompile_compiler,
+                        exec_runtime.interpreter,
+                    ],
+                    transitive = [exec_runtime.files],
+                ),
+                outputs = outputs,
+                execution_requirements = {"supports-path-mapping": ""},
+                env = {
+                    "PYTHONHASHSEED": "0",
+                    "PYTHONNOUSERSITE": "1",
+                    "PYTHONSAFEPATH": "1",
+                },
+                toolchain = EXEC_TOOLS_TOOLCHAIN,
+            )
+
+    return ctx.runfiles(symlinks = runfile_symlinks)
+
 def _assemble_venv_target(ctx, executable, console_scripts):
     """Assemble a venv and its provider-facing runtime metadata.
 
@@ -60,7 +153,6 @@ def _assemble_venv_target(ctx, executable, console_scripts):
         ctx,
         extra_imports_depsets = virtual_resolution.imports,
     )
-    srcs_depset = _py_library.make_srcs_depset(ctx)
 
     default_env = {
         "BAZEL_TARGET": str(ctx.label).lstrip("@"),
@@ -71,13 +163,19 @@ def _assemble_venv_target(ctx, executable, console_scripts):
     venv_stem = ctx.attr.name.replace("/", "_")
     wheels = _py_library.make_wheels_depset(ctx).to_list()
     srcs_depset = _py_library.make_srcs_depset(ctx, extra_depsets = virtual_resolution.srcs)
+    precompiled_runfiles = _precompile_first_party(ctx, srcs_depset, py_toolchain.toolchain)
     indexed_runfiles = None
     if (
         ctx.attr.indexed_imports and
         hasattr(ctx.attr, "_indexed_imports") and
         ctx.attr._indexed_imports[BuildSettingInfo].value
     ):
-        assembled = assemble_venv(
+        indexed_runfiles = _py_library.make_merged_runfiles(
+            ctx,
+            extra_depsets = [srcs_depset] + virtual_resolution.runfiles,
+        )
+
+    assembled = assemble_venv(
         ctx,
         venv_stem = venv_stem,
         py_toolchain = py_toolchain,
@@ -113,6 +211,7 @@ def _assemble_venv_target(ctx, executable, console_scripts):
         extra_runfiles = assembled.declared_outputs,
         extra_runfiles_depsets = [
             ctx.attr._runfiles_lib[DefaultInfo].default_runfiles,
+            precompiled_runfiles,
         ],
     )
 
@@ -249,6 +348,16 @@ does not reinsert a wheel.
     # Required for py_version attribute
     "_allowlist_function_transition": attr.label(
         default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+    ),
+    "_first_party_precompile": attr.label(
+        default = "//py:precompile_first_party",
+    ),
+    "_first_party_precompile_batch_size": attr.label(
+        default = "//py:first_party_precompile_batch_size",
+    ),
+    "_first_party_precompile_compiler": attr.label(
+        allow_single_file = True,
+        default = "//py/private/py_venv:first_party_precompile.py",
     ),
     "_runfiles_lib": attr.label(
         default = "@bazel_tools//tools/bash/runfiles",
