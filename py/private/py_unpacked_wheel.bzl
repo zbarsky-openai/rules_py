@@ -12,7 +12,14 @@ def _py_unpacked_wheel_impl(ctx):
     exec_runtime = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN].exec_runtime
     unpack_script = ctx.file._unpack_script
 
-    unpack_directory = ctx.actions.declare_directory("{}".format(ctx.attr.name))
+    # Library data can bring the same wheel under another Python runtime.
+    # Runfiles paths omit the configuration, so include the runtime here.
+    unpack_directory = ctx.actions.declare_directory("{}.python{}.{}{}".format(
+        ctx.attr.name,
+        py_toolchain.interpreter_version_info.major,
+        py_toolchain.interpreter_version_info.minor,
+        "t" if py_toolchain.freethreaded else "",
+    ))
 
     args = ctx.actions.args()
     args.add_all(["-S", "-E", "-s", "-B"])
