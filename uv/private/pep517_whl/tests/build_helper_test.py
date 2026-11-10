@@ -582,42 +582,59 @@ class WrapperFlagExtractionTest(unittest.TestCase):
         self.assertEqual([], build_helper._get_wrapper_flags("-O2 -fPIC"))
 
 
-class GenerateCrossSiteTest(unittest.TestCase):
-    def _site(self, target_os: str, target_cpu: str) -> str:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        site_dir = build_helper._generate_cross_site(self.tmp.name, target_os, target_cpu)
-        with open(path.join(site_dir, "sitecustomize.py")) as f:
-            return f.read()
+class CrossBuildIdentityTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires a Linux interpreter")
+    def test_cross_build_preserves_execution_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ, {"_PYTHON_HOST_PLATFORM": "macosx-14.0-arm64", "RULES_PY_TARGET_INCLUDE": "target/include"}
+        ):
+            env = build_helper._compiler_env(tmp, cross=True, target_os="darwin", target_cpu="aarch64")
+            self.assertEqual(env["RULES_PY_TARGET_INCLUDE"], path.abspath("target/include"))
+            subprocess.run(
+                [sys.executable, "-c", "import platform,sys,sysconfig,urllib.request; "
+                 "assert sys.platform.startswith('linux'); "
+                 "assert platform.system() == 'Linux'; "
+                 "assert sysconfig.get_platform() == 'macosx-14.0-arm64'"],
+                env=env, check=True,
+            )
 
-    def test_linux_identity(self) -> None:
-        content = self._site("linux", "aarch64")
-        self.assertIn("'aarch64'", content)
-        self.assertIn("'Linux'", content)
-        self.assertIn("sys.platform = 'linux'", content)
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires a Linux interpreter")
+    def test_cross_linux_preserves_execution_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ, {"_PYTHON_HOST_PLATFORM": "linux-aarch64"}
+        ):
+            env = build_helper._compiler_env(tmp, cross=True, target_os="linux", target_cpu="aarch64")
+            subprocess.run(
+                [sys.executable, "-c", "import os,platform,sys,sysconfig; "
+                 "assert sys.platform.startswith('linux'); "
+                 "assert platform.machine() == os.uname().machine; "
+                 "assert sysconfig.get_platform() == 'linux-aarch64'"],
+                env=env, check=True,
+            )
 
-    def test_darwin_machine_is_arm64(self) -> None:
-        content = self._site("darwin", "aarch64")
-        self.assertIn("'arm64'", content)
-        self.assertNotIn("'aarch64'", content)
-        self.assertIn("sys.platform = 'darwin'", content)
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires a Linux interpreter")
+    def test_wheel_platform_uses_compiler_deployment_minimum(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target_sysconfig = path.join(tmp, "_sysconfigdata_test.py")
+            with open(target_sysconfig, "w") as f:
+                f.write("build_time_vars = {\"MACOSX_DEPLOYMENT_TARGET\": \"11.0\"}\n")
+            with mock.patch.dict(os.environ, {
+                "RULES_PY_TARGET_SYSCONFIGDATA": target_sysconfig,
+                "CFLAGS": "-target aarch64-apple-darwin -mmacosx-version-min=14.0",
+                "MACOSX_DEPLOYMENT_TARGET": "11.0",
+            }):
+                env = build_helper._compiler_env(tmp, cross=True, target_os="darwin", target_cpu="aarch64")
+            self.assertEqual(env["MACOSX_DEPLOYMENT_TARGET"], "14.0")
+            self.assertEqual(env["_PYTHON_HOST_PLATFORM"], "macosx-14.0-arm64")
 
-    def test_manylinux_hook_refuses_compatibility(self) -> None:
-        self._site("linux", "x86_64")
-        with open(path.join(self.tmp.name, ".cross_site", "_manylinux.py")) as f:
-            hook = f.read()
-        self.assertIn("return False", hook)
 
-
-class DarwinKernelReleaseTest(unittest.TestCase):
-    def test_known_versions(self) -> None:
-        for deployment, expected_major in (("11.0", 20), ("12.5", 21), ("15.0", 24), ("26.0", 25)):
-            release = build_helper._darwin_kernel_release(deployment)
-            self.assertEqual(expected_major, int(release.split(".")[0]))
-
-    def test_unknown_falls_back(self) -> None:
-        self.assertEqual("20.0.0", build_helper._darwin_kernel_release(None))
-        self.assertEqual("20.0.0", build_helper._darwin_kernel_release("bogus"))
+class ManylinuxGuardTest(unittest.TestCase):
+    def test_cross_build_does_not_claim_host_manylinux_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site_dir = build_helper._generate_manylinux_guard(tmp)
+            with open(path.join(site_dir, "_manylinux.py")) as f:
+                self.assertIn("return False", f.read())
+            self.assertFalse(path.exists(path.join(site_dir, "sitecustomize.py")))
 
 
 class MacosDeploymentTargetTest(unittest.TestCase):

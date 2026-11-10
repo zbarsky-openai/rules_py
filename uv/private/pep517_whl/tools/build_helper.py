@@ -571,80 +571,8 @@ def _macosx_deployment_target(sysconfigdata_path: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _darwin_kernel_release(macos_deployment_target: str | None) -> str:
-    """Fake os.uname() release consistent with the macOS deployment target.
-
-    Darwin kernel majors track macOS marketing versions as 11→20 … 15→24;
-    from the year-based scheme (26 = Darwin 25) it's major−1. Only consumers
-    parsing a plausible kernel version matter here (ctypes' import does),
-    so unknown/missing values fall back to the macOS 11 baseline.
-    """
-    try:
-        major = int((macos_deployment_target or "").split(".")[0])
-    except ValueError:
-        major = 0
-    if 11 <= major <= 15:
-        return "{}.0.0".format(major + 9)
-    if major >= 26:
-        return "{}.0.0".format(major - 1)
-    return "20.0.0"
-
-
 _TITLECASE_OS = {"linux": "Linux", "darwin": "Darwin", "windows": "Windows"}
-_SYS_PLATFORM = {"linux": "linux", "darwin": "darwin", "windows": "win32"}
 
-
-_SITECUSTOMIZE_TEMPLATE = """\
-import os
-import platform
-import sys
-import collections
-
-# ctypes parses os.uname().release at import time when the *host* is Darwin.
-# Import it while uname and sys.platform are still real so the target's
-# faked values never reach that parse.
-try:
-    import ctypes
-except ImportError:
-    pass
-
-_machine = {machine!r}
-_sysname = {sysname!r}
-_release = {release!r}
-
-# setup.py scripts branch on sys.platform to decide which sources to compile
-# (psutil picks _psutil_osx.c vs _psutil_linux.c this way).
-sys.platform = {sys_platform!r}
-
-os.uname = lambda: os.uname_result((_sysname, "build", _release, "", _machine))
-
-# CS_GLIBC_LIB_VERSION otherwise leaks the *host's* glibc version, which
-# feeds manylinux-tag determination in pip/packaging/subprocess.
-if hasattr(os, "confstr"):
-    _real_confstr = os.confstr
-
-    def _confstr(name):
-        if name == "CS_GLIBC_LIB_VERSION":
-            return "glibc_unknown"
-        return _real_confstr(name)
-
-    os.confstr = _confstr
-
-# platform.uname_result.processor is a lazily-computed property that falls
-# back to the real host on this field, so build our own namedtuple instead
-# of the real type (mirrors crossenv's platform-patch.py).
-_PlatformUname = collections.namedtuple("uname_result", "system node release version machine processor")
-_platform_uname = _PlatformUname(_sysname, "build", _release, "", _machine, _machine)
-
-platform.uname = lambda: _platform_uname
-platform.system = lambda: _sysname
-platform.machine = lambda: _machine
-platform.libc_ver = lambda *a, **k: ("", "")
-
-# packaging.tags derives its arch from sysconfig.get_platform() (already
-# faked via $_PYTHON_HOST_PLATFORM); only the manylinux gate needs the
-# top-level _manylinux hook packaging itself looks for.
-"""
 
 _MANYLINUX_HOOK = """\
 # Cross build: we have no verified manylinux compatibility for the target
@@ -660,41 +588,9 @@ manylinux2014_compatible = False
 """
 
 
-def _generate_cross_site(
-    tmpdir: str,
-    target_os: str,
-    target_cpu: str,
-    macos_deployment_target: str | None = None,
-) -> str:
-    """sitecustomize + _manylinux hook faking the target's runtime identity.
-
-    sysconfig is already faked via env vars CPython itself reads
-    (_PYTHON_HOST_PLATFORM, _PYTHON_SYSCONFIGDATA_NAME), but setup.py
-    scripts also branch on os.uname()/platform.machine() directly, which
-    env vars can't reach. sitecustomize.py runs on interpreter startup —
-    before any backend code — and patches os/platform in place. Modeled on
-    crossenv, minus what rules_py doesn't need.
-    """
+def _generate_manylinux_guard(tmpdir: str) -> str:
+    """Do not infer target manylinux compatibility from the execution host."""
     site_dir = path.join(tmpdir, ".cross_site")
-
-    # ctypes' own import does int(os.uname().release.split(".")[0]) on Darwin,
-    # so the faked release must parse as a Darwin kernel version there —
-    # derived from the target's deployment target so both stay consistent.
-    # Linux keeps "": nothing on that path parses it.
-    release = _darwin_kernel_release(macos_deployment_target) if target_os == "darwin" else ""
-    # macOS reports "arm64", never the Bazel constraint's "aarch64" —
-    # setup.py scripts branch on platform.machine() == "arm64", and the
-    # faked identity must agree with the wheel tag derived elsewhere.
-    machine = "arm64" if target_os == "darwin" and target_cpu == "aarch64" else target_cpu
-    _write_generated_file(
-        path.join(site_dir, "sitecustomize.py"),
-        _SITECUSTOMIZE_TEMPLATE.format(
-            machine=machine,
-            sysname=_TITLECASE_OS.get(target_os, target_os),
-            release=release,
-            sys_platform=_SYS_PLATFORM.get(target_os, target_os),
-        ),
-    )
     _write_generated_file(path.join(site_dir, "_manylinux.py"), _MANYLINUX_HOOK)
     return site_dir
 
@@ -812,9 +708,11 @@ def _compiler_env(
         # runtime's: distutils still injects the running interpreter's
         # include path, but CFLAGS-supplied -I directories are searched
         # first.
-        target_include = env.pop("RULES_PY_TARGET_INCLUDE", "")
+        target_include = env.get("RULES_PY_TARGET_INCLUDE", "")
         if target_include:
-            include_flag = "-I" + _absolutize_path(target_include)
+            target_include = _absolutize_path(target_include)
+            env["RULES_PY_TARGET_INCLUDE"] = target_include
+            include_flag = "-I" + target_include
             for key in ("CFLAGS", "CXXFLAGS"):
                 env[key] = (include_flag + " " + env.get(key, "")).strip()
 
@@ -880,19 +778,21 @@ def _compiler_env(
             env["_PYTHON_SYSCONFIGDATA_NAME"] = module_name
             env["PYTHONPATH"] = sysconfig_dir + pathsep + env.get("PYTHONPATH", "")
 
-            # The analysis-time _PYTHON_HOST_PLATFORM can only guess
-            # macosx-11.0; the target interpreter's sysconfig knows the real
-            # deployment version its wheel tags must carry. distutils'
-            # get_platform() also honors $MACOSX_DEPLOYMENT_TARGET directly.
-            if target_os == "darwin":
-                deployment_target = _macosx_deployment_target(target_sysconfig)
-                if deployment_target:
-                    env.setdefault("MACOSX_DEPLOYMENT_TARGET", deployment_target)
-                    cpu = "arm64" if target_cpu == "aarch64" else target_cpu
-                    env["_PYTHON_HOST_PLATFORM"] = "macosx-{}-{}".format(deployment_target, cpu)
+        if target_os == "darwin":
+            # The wheel must support no older macOS than its interpreter or compiler.
+            versions = [env.get("MACOSX_DEPLOYMENT_TARGET"),
+                        _macosx_deployment_target(target_sysconfig) if target_sysconfig else None]
+            for flags in (env.get("CFLAGS", ""), env.get("LDSHAREDFLAGS", "")):
+                versions.extend(re.findall(r"(?:^|\s)-mmacosx-version-min(?:=|\s+)([0-9]+(?:\.[0-9]+)*)", flags))
+            versions = [version for version in versions if version]
+            if versions:
+                deployment_target = max(versions, key=lambda version: tuple(int(part) for part in version.split(".")))
+                env["MACOSX_DEPLOYMENT_TARGET"] = deployment_target
+                cpu = "arm64" if target_cpu == "aarch64" else target_cpu
+                env["_PYTHON_HOST_PLATFORM"] = "macosx-{}-{}".format(deployment_target, cpu)
 
-        if target_os and target_cpu:
-            site_dir = _generate_cross_site(tmpdir, target_os, target_cpu, deployment_target)
+        if target_os == "linux":
+            site_dir = _generate_manylinux_guard(tmpdir)
             env["PYTHONPATH"] = site_dir + pathsep + env.get("PYTHONPATH", "")
 
     # MPI builds (e.g. mpi4py) consult $MPICC before searching PATH, so a
