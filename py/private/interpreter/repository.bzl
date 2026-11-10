@@ -537,7 +537,7 @@ toolchain(
 
     content.append("""
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel", "versions.bzl"],
     visibility = ["//visibility:public"],
 )
 
@@ -547,6 +547,10 @@ current_py_toolchain(
 """)
 
     rctx.file("BUILD.bazel", content = "\n".join(content))
+    rctx.file(
+        "versions.bzl",
+        content = "PYTHON_VERSIONS = %s\n" % repr(sorted(seen_versions)),
+    )
 
     return rctx.repo_metadata(reproducible = True)
 
