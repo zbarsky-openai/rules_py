@@ -20,6 +20,9 @@ the call into a sibling py_venv + a binary that consumes it. The
 binary's launcher exec's the venv's `bin_python`.
 """,
     fields = {
+        "bytecode_runfiles": "First-party bytecode selected by this venv after ambiguity filtering.",
+        "own_runfiles": "Runfiles created by this venv, excluding dependency and interpreter contents.",
+        "wheel_runfiles": "Physical wheel-package merges created by this venv.",
         "bin_python": "File — the venv's bin/python symlink. Callers needing a launcher target point here.",
         "imports": "depset[str] — rlocation-root-relative import paths covered by this venv. Mirrors `PyInfo.imports` of the venv's dep closure.",
         "runtime_runfiles": "Runfiles — venv, wheels, and data without Python import sources.",

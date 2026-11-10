@@ -1,5 +1,6 @@
 """Unpacks a Python wheel into a directory and returns a PyInfo provider that represents that wheel"""
 
+load("//py/private:runfiles_groups.bzl", "runfiles_group_attrs")
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("//py/private:providers.bzl", "PyWheelsInfo", "make_wheel_record")
 load("//py/private:pth.bzl", "make_imports_depset")
@@ -104,7 +105,7 @@ def _py_unpacked_wheel_impl(ctx):
 
     return providers
 
-_attrs = {
+_attrs = runfiles_group_attrs("wheel", []) | {
     "_unpack_script": attr.label(
         default = "//py/tools/unpack:unpack.py",
         allow_single_file = True,

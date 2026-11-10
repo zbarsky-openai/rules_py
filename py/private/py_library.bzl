@@ -4,6 +4,7 @@ Supports "virtual" dependencies with a `virtual_deps` attribute, which lists pac
 without binding them to a particular version of that package.
 """
 
+load("//py/private:runfiles_groups.bzl", "runfiles_group_attrs")
 load("@bazel_skylib//lib:new_sets.bzl", "sets")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
@@ -212,7 +213,10 @@ def _py_library_impl(ctx):
 
     return providers
 
-_attrs = dict({
+_attrs = dict(runfiles_group_attrs("library", ["deps", "data", "resolutions"]), **{
+    "separate_runfiles_group": attr.bool(
+        doc = "Keep this library's sources in a reusable group; data and dependencies retain their own groups.",
+    ),
     "srcs": attr.label_list(
         doc = """Python source files.
 

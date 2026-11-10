@@ -6,6 +6,7 @@ internal `venv` attr) and exec its `bin/python`. The public
 attrs to the auto-generated sibling.
 """
 
+load("//py/private:runfiles_groups.bzl", "runfiles_group_attrs")
 load("@bazel_lib//lib:expand_make_vars.bzl", "expand_locations", "expand_variables")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@hermetic_launcher//launcher:lib.bzl", "launcher")
@@ -180,7 +181,7 @@ def _py_venv_exec_impl(ctx):
 
     return providers
 
-_attrs = dict({
+_attrs = dict(runfiles_group_attrs("binary", ["venv", "data", "main"]), **{
     "env": attr.string_dict(
         doc = "Environment variables to set when running the binary.",
         default = {},

@@ -1,6 +1,7 @@
 """
 """
 
+load("//py/private:runfiles_groups.bzl", "runfiles_group_attrs")
 load("//py/private:providers.bzl", "PyWheelsInfo", "make_wheel_record")
 load("//py/private:py_info.bzl", "PyInfo")
 load("//py/private/toolchain:types.bzl", "EXEC_TOOLS_TOOLCHAIN", "PY_TOOLCHAIN")
@@ -349,7 +350,7 @@ unpack tool, which uses a subset of UV's machinery. Critically, this allows us
 to bypass some of the platform checks that UV does to enable crossbuilds, and is
 lighter weight since the toolchain's files aren't inputs.
 """,
-    attrs = {
+    attrs = runfiles_group_attrs("wheel", []) | {
         "_unpack_script": attr.label(
             default = "//py/tools/unpack:unpack.py",
             allow_single_file = True,

@@ -1,0 +1,13 @@
+load("//py/private:runfiles_groups.bzl", "binary_describer", "interpreter_describer", "library_describer", "venv_describer", "wheel_describer")
+
+package(default_visibility = ["//visibility:public"])
+
+library_describer(name = "library")
+
+venv_describer(name = "venv")
+
+binary_describer(name = "binary")
+
+wheel_describer(name = "wheel")
+
+interpreter_describer(name = "interpreter")

@@ -12,6 +12,7 @@ resolved runtime provider onto built binaries, where downstream consumers
 (e.g. rules_python's py_zipapp_binary) index it by that provider symbol.
 """
 
+load("//py/private:runfiles_groups.bzl", "runfiles_group_attrs")
 load("@rules_python//python:py_runtime_info.bzl", _PyRuntimeInfo = "PyRuntimeInfo")
 
 PyRuntimeInfo = _PyRuntimeInfo
@@ -62,7 +63,7 @@ for the standard Python toolchain type, and by exec platform for the
 exec-tools toolchain type (build actions get an interpreter runnable on the
 build host regardless of the target platform being built for).""",
     implementation = _py_runtime_toolchain_impl,
-    attrs = {
+    attrs = runfiles_group_attrs("interpreter", []) | {
         "interpreter": attr.label(
             doc = "The interpreter executable within `files`.",
             allow_single_file = True,

@@ -33,6 +33,7 @@ load("//py/private:py_info.bzl", "PyInfo")
 load("//py/private:py_info_interop.bzl", "RulesPythonPyInfo")
 load("//py/private:py_library.bzl", _py_library = "py_library_utils")
 load("//py/private:py_semantics.bzl", _py_semantics = "semantics")
+load("//py/private:runfiles_groups.bzl", "runfiles_group_attrs")
 load("//py/private:transitions.bzl", "python_transition")
 load("//py/private/toolchain:types.bzl", "EXEC_TOOLS_TOOLCHAIN", "PY_TOOLCHAIN")
 load(":py_venv_exec.bzl", _py_venv_exec = "py_venv_exec")
@@ -41,7 +42,7 @@ load(":venv.bzl", "assemble_venv")
 
 _FirstPartyPycEntry = provider(
     doc = "One source's compiled bytecode and runfiles entry.",
-    fields = ["source", "symlink", "pyc_tag"],
+    fields = ["source", "symlink", "pyc_tag", "owner", "separate"],
 )
 
 def _interpreter_flags(ctx):
@@ -84,7 +85,7 @@ def _pyc_path(source, pyc_tag):
         pyc_tag,
     )
 
-def _precompile_first_party(ctx, sources, target_runtime, precompiled = {}):
+def _precompile_first_party(ctx, sources, target_runtime, precompiled = {}, separate = False):
     if not ctx.attr._first_party_precompile[BuildSettingInfo].value:
         return ctx.runfiles(), []
 
@@ -176,7 +177,7 @@ def _precompile_first_party(ctx, sources, target_runtime, precompiled = {}):
     compiled = ctx.runfiles(symlinks = runfile_symlinks)
     symlinks = {entry.path: entry for entry in compiled.symlinks.to_list()}
     return compiled.merge(ctx.runfiles(symlinks = depset(shared_symlinks))), [
-        _FirstPartyPycEntry(source = source, symlink = symlinks[_pyc_path(source, target_runtime.pyc_tag)], pyc_tag = target_runtime.pyc_tag)
+        _FirstPartyPycEntry(source = source, symlink = symlinks[_pyc_path(source, target_runtime.pyc_tag)], pyc_tag = target_runtime.pyc_tag, owner = ctx.label, separate = separate)
         for source in first_party_sources
     ]
 
@@ -190,7 +191,7 @@ def _first_party_pyc_aspect_impl(target, ctx):
     # decides whether a source's import path is unambiguous before using it.
     runtime = ctx.toolchains[PY_TOOLCHAIN].py3_runtime
     sources = getattr(ctx.rule.files, "srcs", [])
-    _, entries = _precompile_first_party(ctx, depset(sources), runtime)
+    _, entries = _precompile_first_party(ctx, depset(sources), runtime, separate = getattr(ctx.rule.attr, "separate_runfiles_group", False))
     return [FirstPartyPycInfo(entries = depset(
         entries,
         transitive = [
@@ -308,7 +309,16 @@ def _assemble_venv_target(ctx, executable, console_scripts):
         ],
     )
 
+    # assemble_venv's directory outputs are physical merges of wheel packages.
+    # Keep wheel payloads, venv support, and bytecode separate for packagers.
+    # None of these partitions changes the runtime runfiles below.
+    wheel_runfiles = ctx.runfiles(files = [file for file in assembled.declared_outputs if file.is_directory])
+    own_runfiles = ctx.runfiles(files = [file for file in assembled.declared_outputs if not file.is_directory] + venv_only)
+
     return VirtualenvInfo(
+        own_runfiles = own_runfiles,
+        bytecode_runfiles = precompiled_runfiles,
+        wheel_runfiles = wheel_runfiles,
         bin_python = assembled.bin_python,
         imports = imports_depset,
         runtime_runfiles = runfiles,
@@ -479,6 +489,7 @@ does not reinsert a wheel.
 })
 
 _lib_attrs.update(**_py_library.attrs)
+_lib_attrs.update(runfiles_group_attrs("venv", ["srcs", "deps", "data", "resolutions", "_runfiles_lib"], toolchains = [Label(PY_TOOLCHAIN)]))
 _lib_attrs["precompile_first_party"] = attr.bool(
     default = True,
     doc = "Include first-party bytecode when globally enabled.",
@@ -682,6 +693,7 @@ def py_binary_with_venv(py_rule, name, main, srcs = [], deps = [], data = [], im
     # Target names can contain `/` (Bazel allows it), but venv labels
     # and the on-disk venv basename must be slash-free.
     safe_name = name.replace("/", "_")
+
     # Symbolic macros require generated targets to share their name prefix.
     # Let their callers choose a legal private name without exposing the venv.
     if expose_venv:
