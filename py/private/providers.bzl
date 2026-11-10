@@ -13,7 +13,7 @@ rules use `install_tree` to retain each wheel as a package leaf independently
 of whether its metadata was available during analysis.
 """,
     fields = {
-        "wheels": """Depset of wheel record structs, one per wheel in the transitive closure. rules_py aggregates this field in
+        "wheels": """Depset of wheel records, one per wheel in the transitive closure. rules_py aggregates this field in
 postorder. Producers must use `default` or `postorder`, the orders Bazel permits
 in that aggregate. For collision classes that select one claimant, permissive
 handling gives the later distinct element in the flattened sequence precedence.
@@ -62,6 +62,38 @@ present and consistent with the raw ones.
     },
 )
 
+_WheelRecord = provider(fields = [
+    "top_levels",
+    "top_level_dirs",
+    "namespace_top_levels",
+    "namespace_entries",
+    "namespace_dirs",
+    "regular_roots",
+    "native_roots",
+    "site_packages_rfpath",
+    "console_scripts",
+    "data_files",
+    "install_tree",
+    "tl_claims",
+    "metadata_top_levels",
+    "cs_claims",
+])
+
+_TopLevelClaim = provider(fields = [
+    "site_packages",
+    "is_ns",
+    "is_dir",
+    "is_native",
+    "ns_entries",
+    "ns_dirs",
+])
+
+_ConsoleScriptClaim = provider(fields = [
+    "site_packages",
+    "module",
+    "func",
+])
+
 def _validate_data_files(data_files, site_packages_rfpath, install_tree):
     """Reject data paths venv assembly could not turn into a prefix output.
 
@@ -103,7 +135,7 @@ def make_wheel_record(
         data_files = ()):
     """Build one PyWheelsInfo wheel record.
 
-    Precomputes the collision-resolution claim structs that venv assembly
+    Precomputes the collision-resolution claim records that venv assembly
     consumes, so parsing happens once per wheel rather than per consuming
     binary. See the PyWheelsInfo field docs for the raw fields' semantics.
 
@@ -122,7 +154,7 @@ def make_wheel_record(
             the wheel's complete prefix tree (see the PyWheelsInfo field docs).
 
     Returns:
-        A struct for PyWheelsInfo.wheels.
+        A record for PyWheelsInfo.wheels.
     """
     _validate_data_files(data_files, site_packages_rfpath, install_tree)
 
@@ -142,7 +174,7 @@ def make_wheel_record(
         if tl.endswith(".dist-info") or tl.endswith(".egg-info"):
             metadata_top_levels.append(tl)
             continue
-        tl_claims.append((tl, struct(
+        tl_claims.append((tl, _TopLevelClaim(
             site_packages = site_packages_rfpath,
             is_ns = tl in ns_set,
             is_dir = tl in top_level_dir_set,
@@ -165,13 +197,13 @@ def make_wheel_record(
         func = func.strip()
         if not name or not module or not func:
             continue
-        cs_claims.append((name, struct(
+        cs_claims.append((name, _ConsoleScriptClaim(
             site_packages = site_packages_rfpath,
             module = module,
             func = func,
         )))
 
-    return struct(
+    return _WheelRecord(
         top_levels = tuple(top_levels),
         top_level_dirs = tuple(top_level_dirs),
         namespace_top_levels = tuple(namespace_top_levels),
