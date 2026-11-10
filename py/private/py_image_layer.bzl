@@ -42,7 +42,7 @@ load(
     "make_codec",
     "parse_compression",
 )
-load("//py/private:providers.bzl", "PyWheelsInfo")
+load("//py/private:providers.bzl", "PyWheelsInfo", "wheels_depset")
 load("//py/private:py_info.bzl", "PyInfo")
 load("//py/private:py_info_interop.bzl", "has_py_info")
 load("//py/private/py_venv:types.bzl", "VirtualenvInfo")
@@ -471,7 +471,7 @@ def _layer_aspect_impl(target, ctx):
     if PyWheelsInfo in target and ctx.rule.kind in ("whl_install", "py_unpacked_wheel"):
         plan = ctx.attr._layer_tier[PyLayerTierInfo]
         label = normalize_label(str(target.label))
-        wheel_records = target[PyWheelsInfo].wheels.to_list()
+        wheel_records = wheels_depset(target[PyWheelsInfo]).to_list()
         if len(wheel_records) != 1:
             fail("py_image_layer expected exactly one wheel record from {}, got {}".format(target.label, len(wheel_records)))
         wheel = wheel_records[0]

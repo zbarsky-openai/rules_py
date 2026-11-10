@@ -1,5 +1,8 @@
 # aspect_rules_py
 
+OpenAI fork: `main` carries the downstream patch stack. See the
+[patch inventory and dependency requirements](docs/openai-fork.md).
+
 > [!NOTE]
 > This repository uses the [Aspect CLI](https://github.com/aspect-build/aspect-cli) for CI and local development.
 > See the [docs](https://docs.aspect.build/cli/overview) and [install instructions](https://docs.aspect.build/cli/install) to get started.

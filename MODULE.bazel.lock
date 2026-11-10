@@ -38,7 +38,8 @@
     "https://bcr.bazel.build/modules/bazel_features/1.4.1/MODULE.bazel": "e45b6bb2350aff3e442ae1111c555e27eac1d915e77775f6fdc4b351b758b5d7",
     "https://bcr.bazel.build/modules/bazel_features/1.42.0/MODULE.bazel": "e8ca15cb2639c5f12183db6dcb678735555d0cdd739b32a0418b6532b5e565f8",
     "https://bcr.bazel.build/modules/bazel_features/1.43.0/MODULE.bazel": "defa2226f06ba20550d6548c3a2ea2a7929634437a52973869c20c225450eb91",
-    "https://bcr.bazel.build/modules/bazel_features/1.43.0/source.json": "1c4207dc858d6de0eecef30026793616bbf420c74aac27b6bad212534a730437",
+    "https://bcr.bazel.build/modules/bazel_features/1.51.0/MODULE.bazel": "8e1310d09db6ee2e4f19f9994e360aca941ddc32083edc8d9bdc19c83c94cee4",
+    "https://bcr.bazel.build/modules/bazel_features/1.51.0/source.json": "d5af1f1748d2b4ace5f04087030c0a1cfd93f5be6bdf0b5c1beb24ed0fd24955",
     "https://bcr.bazel.build/modules/bazel_features/1.9.0/MODULE.bazel": "885151d58d90d8d9c811eb75e3288c11f850e1d6b481a8c9f766adee4712358b",
     "https://bcr.bazel.build/modules/bazel_features/1.9.1/MODULE.bazel": "8f679097876a9b609ad1f60249c49d68bfab783dd9be012faf9d82547b14815a",
     "https://bcr.bazel.build/modules/bazel_lib/3.0.0/MODULE.bazel": "22b70b80ac89ad3f3772526cd9feee2fa412c2b01933fea7ed13238a448d370d",
@@ -230,64 +231,6 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
-    "@@aspect_gazelle_prebuilt+//:extensions.bzl%prebuilt_extension": {
-      "general": {
-        "bzlTransitiveDigest": "i/vIlKJC1iEQAYLQDutyghlx9kWfstBvPQdArGzOL2Q=",
-        "usagesDigest": "YQ4ocQA/oC+jyWDDcgT9LGFFpShxvHItg9d1OTA4g7Q=",
-        "recordedFileInputs": {},
-        "recordedDirentsInputs": {},
-        "envVariables": {},
-        "generatedRepoSpecs": {
-          "aspect_gazelle_prebuilt_linux_amd64": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
-            "attributes": {
-              "executable": true,
-              "sha256": "aedb7ba34b2bcd1c612837324d1825375cb4297649cc3778b4ba78eb7f4b0b98",
-              "urls": [
-                "https://github.com/aspect-build/aspect-gazelle/releases/download/prebuilt-v0.0.18/aspect_gazelle-linux_amd64"
-              ]
-            }
-          },
-          "aspect_gazelle_prebuilt_linux_arm64": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
-            "attributes": {
-              "executable": true,
-              "sha256": "f24220bee898265c6e5eef2a8c93fe41b415e30d89e27aacc932cffa442161ad",
-              "urls": [
-                "https://github.com/aspect-build/aspect-gazelle/releases/download/prebuilt-v0.0.18/aspect_gazelle-linux_arm64"
-              ]
-            }
-          },
-          "aspect_gazelle_prebuilt_darwin_amd64": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
-            "attributes": {
-              "executable": true,
-              "sha256": "8b06306ca75684875743a63a1380f32cd77bc24cfcfd943f8dbe7cc81113ef24",
-              "urls": [
-                "https://github.com/aspect-build/aspect-gazelle/releases/download/prebuilt-v0.0.18/aspect_gazelle-darwin_amd64"
-              ]
-            }
-          },
-          "aspect_gazelle_prebuilt_darwin_arm64": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
-            "attributes": {
-              "executable": true,
-              "sha256": "791a4573acf58550e26fac42e3f4277caa2beb73b4bdbf63fcf86e2a43ec2836",
-              "urls": [
-                "https://github.com/aspect-build/aspect-gazelle/releases/download/prebuilt-v0.0.18/aspect_gazelle-darwin_arm64"
-              ]
-            }
-          }
-        },
-        "recordedRepoMappingEntries": [
-          [
-            "aspect_gazelle_prebuilt+",
-            "bazel_tools",
-            "bazel_tools"
-          ]
-        ]
-      }
-    },
     "@@aspect_tools_telemetry+//:extension.bzl%telemetry": {
       "general": {
         "bzlTransitiveDigest": "ihzLOoAnQP6Y5iSYOhEjvb6uxEbA6ZgH8Qikau2lGRU=",
@@ -305,7 +248,7 @@
                 "aspect_rules_py": "",
                 "aspect_tools_telemetry": "0.5.2"
               },
-              "last_notice": 3
+              "last_notice": 0
             }
           }
         },
@@ -323,197 +266,6 @@
             "aspect_tools_telemetry+",
             "bazel_skylib",
             "bazel_skylib+"
-          ]
-        ]
-      }
-    },
-    "@@llvm+//3rd_party/gcc/extension:gcc.bzl%gcc": {
-      "general": {
-        "bzlTransitiveDigest": "XUWTels9SzO7xhmQBqYtaFYFMTjrFMSDFi/Q7hv4f34=",
-        "usagesDigest": "9IP/e++b81Ga1zICxzXu+yqfe5i4DX5F/SsrgV5a568=",
-        "recordedFileInputs": {},
-        "recordedDirentsInputs": {},
-        "envVariables": {},
-        "generatedRepoSpecs": {
-          "gcc": {
-            "repoRuleId": "@@llvm+//:http_bsdtar_archive.bzl%http_bsdtar_archive",
-            "attributes": {
-              "build_file": "@@llvm+//3rd_party/gcc:gcc.BUILD.bazel",
-              "includes": [
-                "gcc/BASE-VER",
-                "gcc/DATESTAMP",
-                "gcc/ginclude/unwind-arm-common.h",
-                "config/acx.m4",
-                "config/cet.m4",
-                "config/futex.m4",
-                "config/gc++filt.m4",
-                "config/gthr.m4",
-                "config/hwcaps.m4",
-                "config/iconv.m4",
-                "config/lthostflags.m4",
-                "config/multi.m4",
-                "config/no-executables.m4",
-                "config/tls.m4",
-                "config/toolexeclibdir.m4",
-                "config/unwind_ipinfo.m4",
-                "include/ansidecl.h",
-                "include/demangle.h",
-                "include/dyn-string.h",
-                "include/getopt.h",
-                "include/libiberty.h",
-                "libgcc/gthr-posix.h",
-                "libgcc/gthr-single.h",
-                "libgcc/gthr.h",
-                "libgcc/config/arm/unwind-arm.h",
-                "libgcc/unwind-generic.h",
-                "libgcc/unwind-pe.h",
-                "libiberty/cp-demangle.c",
-                "libiberty/cp-demangle.h",
-                "libstdc++-v3/acinclude.m4",
-                "libstdc++-v3/config/**",
-                "libstdc++-v3/configure.ac",
-                "libstdc++-v3/configure.host",
-                "libstdc++-v3/crossconfig.m4",
-                "libstdc++-v3/linkage.m4",
-                "libstdc++-v3/include/**",
-                "libstdc++-v3/libsupc++/**",
-                "libstdc++-v3/src/**"
-              ],
-              "sha256": "dc033fdfd79caf199113446af6d082004534437b6ebd276f9732815d86cbe723",
-              "strip_prefix": "gcc-2bfd402f8569511901ec8fe7628f57471e6d240a",
-              "urls": [
-                "https://github.com/gcc-mirror/gcc/archive/2bfd402f8569511901ec8fe7628f57471e6d240a.tar.gz"
-              ]
-            }
-          }
-        },
-        "recordedRepoMappingEntries": [
-          [
-            "llvm+",
-            "bazel_lib",
-            "bazel_lib+"
-          ],
-          [
-            "llvm+",
-            "bazel_tools",
-            "bazel_tools"
-          ]
-        ]
-      }
-    },
-    "@@pybind11_bazel+//:python_configure.bzl%extension": {
-      "general": {
-        "bzlTransitiveDigest": "D2/qWHU6yQFwRG7Bb+caqrYMha5avsASao2vERrxK24=",
-        "usagesDigest": "fycyB39YnXIJkfWCIXLUKJMZzANcuLy9ZE73hRucjFk=",
-        "recordedFileInputs": {
-          "@@pybind11_bazel+//MODULE.bazel": "88af1c246226d87e65be78ed49ecd1e6f5e98648558c14ce99176da041dc378e"
-        },
-        "recordedDirentsInputs": {},
-        "envVariables": {},
-        "generatedRepoSpecs": {
-          "local_config_python": {
-            "repoRuleId": "@@pybind11_bazel+//:python_configure.bzl%python_configure",
-            "attributes": {}
-          },
-          "pybind11": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "build_file": "@@pybind11_bazel+//:pybind11.BUILD",
-              "strip_prefix": "pybind11-2.11.1",
-              "urls": [
-                "https://github.com/pybind/pybind11/archive/v2.11.1.zip"
-              ]
-            }
-          }
-        },
-        "recordedRepoMappingEntries": [
-          [
-            "pybind11_bazel+",
-            "bazel_tools",
-            "bazel_tools"
-          ]
-        ]
-      }
-    },
-    "@@rules_fuzzing+//fuzzing/private:extensions.bzl%non_module_dependencies": {
-      "general": {
-        "bzlTransitiveDigest": "4LouzhF/yT117s7peGnNs9ROomiJXC6Zl5R0oI21jho=",
-        "usagesDigest": "wy6ISK6UOcBEjj/mvJ/S3WeXoO67X+1llb9yPyFtPgc=",
-        "recordedFileInputs": {},
-        "recordedDirentsInputs": {},
-        "envVariables": {},
-        "generatedRepoSpecs": {
-          "platforms": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "urls": [
-                "https://mirror.bazel.build/github.com/bazelbuild/platforms/releases/download/0.0.8/platforms-0.0.8.tar.gz",
-                "https://github.com/bazelbuild/platforms/releases/download/0.0.8/platforms-0.0.8.tar.gz"
-              ],
-              "sha256": "8150406605389ececb6da07cbcb509d5637a3ab9a24bc69b1101531367d89d74"
-            }
-          },
-          "rules_python": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "sha256": "d70cd72a7a4880f0000a6346253414825c19cdd40a28289bdf67b8e6480edff8",
-              "strip_prefix": "rules_python-0.28.0",
-              "url": "https://github.com/bazelbuild/rules_python/releases/download/0.28.0/rules_python-0.28.0.tar.gz"
-            }
-          },
-          "bazel_skylib": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "sha256": "cd55a062e763b9349921f0f5db8c3933288dc8ba4f76dd9416aac68acee3cb94",
-              "urls": [
-                "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.5.0/bazel-skylib-1.5.0.tar.gz",
-                "https://github.com/bazelbuild/bazel-skylib/releases/download/1.5.0/bazel-skylib-1.5.0.tar.gz"
-              ]
-            }
-          },
-          "com_google_absl": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "urls": [
-                "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240116.1.zip"
-              ],
-              "strip_prefix": "abseil-cpp-20240116.1",
-              "integrity": "sha256-7capMWOvWyoYbUaHF/b+I2U6XLMaHmky8KugWvfXYuk="
-            }
-          },
-          "rules_fuzzing_oss_fuzz": {
-            "repoRuleId": "@@rules_fuzzing+//fuzzing/private/oss_fuzz:repository.bzl%oss_fuzz_repository",
-            "attributes": {}
-          },
-          "honggfuzz": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "build_file": "@@rules_fuzzing+//:honggfuzz.BUILD",
-              "sha256": "6b18ba13bc1f36b7b950c72d80f19ea67fbadc0ac0bb297ec89ad91f2eaa423e",
-              "url": "https://github.com/google/honggfuzz/archive/2.5.zip",
-              "strip_prefix": "honggfuzz-2.5"
-            }
-          },
-          "rules_fuzzing_jazzer": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_jar",
-            "attributes": {
-              "sha256": "ee6feb569d88962d59cb59e8a31eb9d007c82683f3ebc64955fd5b96f277eec2",
-              "url": "https://repo1.maven.org/maven2/com/code-intelligence/jazzer/0.20.1/jazzer-0.20.1.jar"
-            }
-          },
-          "rules_fuzzing_jazzer_api": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_jar",
-            "attributes": {
-              "sha256": "f5a60242bc408f7fa20fccf10d6c5c5ea1fcb3c6f44642fec5af88373ae7aa1b",
-              "url": "https://repo1.maven.org/maven2/com/code-intelligence/jazzer-api/0.20.1/jazzer-api-0.20.1.jar"
-            }
-          }
-        },
-        "recordedRepoMappingEntries": [
-          [
-            "rules_fuzzing+",
-            "bazel_tools",
-            "bazel_tools"
           ]
         ]
       }
@@ -626,7 +378,7 @@
   },
   "facts": {
     "//py:extensions.bzl%python_interpreters": {
-      "release_index_v2_20260303_https://github.com/astral-sh/python-build-standalone/releases/download_install_only": {
+      "release_index_v3_20260303_https://github.com/astral-sh/python-build-standalone/releases/download_install_only": {
         "3.10/aarch64-apple-darwin/default": {
           "filename": "cpython-3.10.20+20260303-aarch64-apple-darwin-install_only.tar.gz",
           "full_version": "3.10.20",

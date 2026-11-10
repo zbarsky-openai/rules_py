@@ -1,0 +1,270 @@
+{
+  "upstream_repository": "https://github.com/aspect-build/rules_py",
+  "upstream_commit": "64ac812ee41bd7e3becec4ca1efa2a14e5337614",
+  "patches": [
+    {
+      "order": 1,
+      "patch": "aspect_rules_py_allow_sha_release_ids.patch",
+      "sha256": "753917fb04d8e4e57121ba2d569143c87ea411822e7c1173e9f080ae01b8f404",
+      "commit": "5abe12b413a6782294c4f2bd86367b8ac7c492b2"
+    },
+    {
+      "order": 2,
+      "patch": "aspect_rules_py_composable_test_rule.patch",
+      "sha256": "dd48ba77f4ad0f8fb9f2b43de5460840304ec430e65eb6278f301574bc11fff6",
+      "commit": "cfe54c530d268500a00ea3181a25c012195d3c7c"
+    },
+    {
+      "order": 3,
+      "patch": "aspect_rules_py_default_wheel_exclusions.patch",
+      "sha256": "6e594193d2f34e43c18dbb94d0c5365c7c7d6e696421a1a35316453a7f86aa02",
+      "commit": "bb272f3e0a07586412c7dde185fc7a4c5c1c586d"
+    },
+    {
+      "order": 4,
+      "patch": "aspect_rules_py_deterministic_wheel_install.patch",
+      "sha256": "7eae30bb6cbe48a7ed7b0610e239aac4ba7456ee2a7fe3955868fdbb7795cf49",
+      "commit": "80c7fb8d983c080727c611dfadd026d1851f76be"
+    },
+    {
+      "order": 5,
+      "patch": "aspect_rules_py_freethreaded_stripped.patch",
+      "sha256": "ea164fde95cc6e7805112db4e7c68e5403e2cb6d2a6f76c8bcd259ec3185387e",
+      "commit": "d3377327db067e8bdff7af9e2b21839064fafaa5"
+    },
+    {
+      "order": 6,
+      "patch": "aspect_rules_py_hermetic_native_linker.patch",
+      "sha256": "8e7bea578ae0764ce32292509efaba25ee07b146ba06fe257edfeecea2970e99",
+      "commit": "2bb24923bb6e71a3bdb13aa782bb700968aadd6a"
+    },
+    {
+      "order": 7,
+      "patch": "aspect_rules_py_indexed_imports.patch",
+      "sha256": "58b5aa8e63916013e2489a350fc6f50502c4597997ae6b118005d2669c8e678a",
+      "commit": "bbb92ccbc5369679d3d6171553bbcdf041e7c764"
+    },
+    {
+      "order": 8,
+      "patch": "aspect_rules_py_pre_build_patches_force_source.patch",
+      "sha256": "b9a979f5e7593e8178ca8a392b5b0554bf0b8ec2a229cdb94d2dd17e6b472e70",
+      "commit": "733326e065579b54ae73a75ad277cd92b3f76df5"
+    },
+    {
+      "order": 9,
+      "patch": "aspect_rules_py_registered_versions.patch",
+      "sha256": "d3521b41d5df4d0a021edfdfef3724e071d3691d5e5ac3da5a03a889518e5661",
+      "commit": "0101d78de77c1d1e922919e8050bcdfa7744e4ef"
+    },
+    {
+      "order": 10,
+      "patch": "aspect_rules_py_native_wheel_sysroot.patch",
+      "sha256": "3107241e923373d295d8c7a13956b02ef1222fc1c6ffa44ead1365885ff3cf65",
+      "commit": "44ae4a746bdc708115cccce8b10ef885ae58d1b1"
+    },
+    {
+      "order": 11,
+      "patch": "aspect_rules_py_native_wheel_llvm_compile_flags.patch",
+      "sha256": "93889c3928e05b9ebdef5a5f1963830c903979f9ea5f7e019546c503bc01bf3e",
+      "commit": "8dfe65c1b975865e7822f819c482251fe021802d"
+    },
+    {
+      "order": 12,
+      "patch": "aspect_rules_py_native_wheel_link_inputs.patch",
+      "sha256": "32b67ecdf48be25f710f47cfc328059932c6a87ef4d7a97e6ca79b4e2768676e",
+      "commit": "e11bfd846a77574745768f7824680b809b18f279"
+    },
+    {
+      "order": 13,
+      "patch": "aspect_rules_py_native_wheel_windows_platform.patch",
+      "sha256": "5c78f762db58d227c1bc1a0d8abc95e9e90a1a7dae9945d32e199c4dbff15cd3",
+      "commit": "e41d82e34aa61ac7a4380f1c10f53e0e43d9839f"
+    },
+    {
+      "order": 14,
+      "patch": "aspect_rules_py_global_target_overrides.patch",
+      "sha256": "25abad27bed4c66d4a55004fb4e2fe076e3ef1c520d6702d5572c3930ff7afd0",
+      "commit": "d1e0fb396dc7b5a8cdff2beb35da6d60cffeab4b"
+    },
+    {
+      "order": 15,
+      "patch": "aspect_rules_py_required_runfiles.patch",
+      "sha256": "0bcd87750e253d8d8d6539ef62d715985c1da50100380ac6f5c7dcd480f88faa",
+      "commit": "4ab95935938653ef603f2b9ab1866db843c5736c"
+    },
+    {
+      "order": 16,
+      "patch": "aspect_rules_py_unpacked_wheel_runtime_paths.patch",
+      "sha256": "6a52b4ce2da7354eadc495a1bfbbadd8fbb0875a63a4261592036262740b7836",
+      "commit": "c4171ecaee421b6e81a387fe3fd75817f18b7169"
+    },
+    {
+      "order": 17,
+      "patch": "aspect_rules_py_first_party_precompile.patch",
+      "sha256": "722c4a171e21cec027b103df60bf76c5cacc249105a062c0d1a3ab3d6076a331",
+      "commit": "28356a49e2f35db5f4aeb6dfe694135673347dda"
+    },
+    {
+      "order": 18,
+      "patch": "aspect_rules_py_shared_first_party_precompile.patch",
+      "sha256": "e32c1a1ef32154ae7678aa723cd59cb0ee7fa0b598026b5cd52ac1dda86bfe93",
+      "commit": "570ea748a1e3e1a9a3756947b770ff30ebc19f2c"
+    },
+    {
+      "order": 19,
+      "patch": "aspect_rules_py_wheel_record_fields.patch",
+      "sha256": "f5a02d73a01668474863c8700fcefe5a9ce6dd295396c0e76a9eca1df5575415",
+      "commit": "676f179c8fab5bad13557705080786d29d3b49d5"
+    },
+    {
+      "order": 20,
+      "patch": "aspect_rules_py_shared_wheel_projection_records.patch",
+      "sha256": "62d2ac6049f45a6d491c4fff3ae19cf0242ba529f477c374b31201e2c3513a09",
+      "commit": "ba172c04ec959bdc21c78d2885bb25abab1d7c85"
+    },
+    {
+      "order": 21,
+      "patch": "aspect_rules_py_shared_console_scripts.patch",
+      "sha256": "6195d22e6e7c112c4e6db3977800faaa940ab2c506a6c853ec37ba6a6bbd9518",
+      "commit": "7c69c91722d5a6d69ab2c48ecb389bcd0e521204"
+    },
+    {
+      "order": 22,
+      "patch": "aspect_rules_py_private_venv_name.patch",
+      "sha256": "6f8f0c8a19a49aa5564e62c0942b1dfad8d7e9ed235c3682f632d3b4cef67277",
+      "commit": "b64d1794e82db420c844a8a647cc295514c0f76e"
+    },
+    {
+      "order": 23,
+      "patch": "aspect_rules_py_typecheck_wheel_paths.patch",
+      "sha256": "109083eb4b701ec356ba52c76eafce337581330b2cc9385c26b8da2ee9447e29",
+      "commit": "8450f355f797f575126fe77149effc4fa148fa25"
+    },
+    {
+      "order": 24,
+      "patch": "aspect_rules_py_projection_iteration.patch",
+      "sha256": "33b2c0e2f973d22003959b74926d1f51e23b16bd3e14c69dc9c42e26459cbec1",
+      "commit": "444bff47605017fb09b5b94d15e0301fd92b2d0f"
+    },
+    {
+      "order": 25,
+      "patch": "aspect_rules_py_reproducible_sdist_configure.patch",
+      "sha256": "a3579b25d4ee1bfe40945c662e8abc1a7e26f50d68305298a221ad2e220fa8e4",
+      "commit": "c26ca83b5f440e62b8d69c09bb89ce8902ae509a"
+    },
+    {
+      "order": 26,
+      "patch": "aspect_rules_py_replacement_deps.patch",
+      "sha256": "93f0cf8c53a34ea9c9b9c98de6186d895c15abff463aee86f63ba160acdf4f4e",
+      "commit": "58cd27469a2075731e749d22acf33ee624c4e9cc"
+    },
+    {
+      "order": 27,
+      "patch": "aspect_rules_py_sdist_build_tool.patch",
+      "sha256": "8856744e509e21acda3dfc0457930672fb72c150a4b8f8677be1502f54827cb8",
+      "commit": "adc361b0b40c0eb4a45cf9591f400d10fa7e633d"
+    },
+    {
+      "order": 28,
+      "patch": "aspect_rules_py_native_wheel_debug_prefix_map.patch",
+      "sha256": "3ebdc5f843c4fe71ba047f3e9707f13ff8bf643fce6c14da9023c70aa928d45b",
+      "commit": "dde56800554233dcb399fe9091e9d15b936e6ad8"
+    },
+    {
+      "order": 29,
+      "patch": "aspect_rules_py_selective_sdist_metadata.patch",
+      "sha256": "575d2f36c8081cc13806030dc1cdbce3ee0bdb2748cd6326e17d5a8edc849661",
+      "commit": "69681a7267a094504b140eb1789537ea4e8c9aad"
+    },
+    {
+      "order": 30,
+      "patch": "aspect_rules_py_runtime_runfiles.patch",
+      "sha256": "40d8a620db6b5c995aed995fd2463499fd9810835b2c99830ba439eba5b6fc0e",
+      "commit": "03f533c0a4e70ec529f4654e39b13e606373b994"
+    },
+    {
+      "order": 31,
+      "patch": "aspect_rules_py_native_wrapper_interpreter.patch",
+      "sha256": "6889a597be8e5a6848089417817b8ade18d03a88af08f2d10bf9f1eaf0f17445",
+      "commit": "7578253c4b0cce77bc2b6a3715d1cff9a46df4da"
+    },
+    {
+      "order": 32,
+      "patch": "aspect_rules_py_cross_host_identity.patch",
+      "sha256": "ec6f8d48646001b5efb0b62d3913fc2bddd3038efb27bed2c6345d8be8ba51ed",
+      "commit": "f33b5c35a20167ed3f1fe9b32e44ea435e88a2bf"
+    },
+    {
+      "order": 33,
+      "patch": "aspect_rules_py_wheel_runtime_namespace.patch",
+      "sha256": "043e634a2125fda3011542d3fad5d90ede11aae3f065c8d19e62b0aed84a57c8",
+      "commit": "e0fdfe5df901200ab54f6ecf27b3dcd09e5d681f"
+    },
+    {
+      "order": 34,
+      "patch": "aspect_rules_py_runfiles_groups.patch",
+      "sha256": "6b4ff553fbd0bfc97ae041879f54025e6057bea12596b9c9a8e698c8972a82a1",
+      "commit": "dc6d646205d5c9ac188aeb711e350dfd8a85781c"
+    },
+    {
+      "order": 35,
+      "patch": "aspect_rules_py_namespace_prefix_scan.patch",
+      "sha256": "cf9b7e083ea00168fa6b4f85ea20b6f487bbcb073442d8efd6e72c0f31b67bd3",
+      "commit": "25c10808ecfdd8ce07e373d5ab6afddd8d597054"
+    },
+    {
+      "order": 36,
+      "patch": "aspect_rules_py_native_package_overrides.patch",
+      "sha256": "1e0a5a6034c0248e1df03f82aa0545b7de29266a8fac06fc7c5f40d1e52238c3",
+      "commit": "4331964fd104b99a7dd141cd2d49664860715bb3"
+    },
+    {
+      "order": 37,
+      "patch": "aspect_rules_py_uv_incremental_repositories.patch",
+      "sha256": "cad541e36a94444564da3bdbfee747a819aefe84640382006b64c3cdce91a962",
+      "commit": "97e302d129ca6e2468d984c86f5aa634513c659a"
+    },
+    {
+      "order": 38,
+      "patch": "aspect_rules_py_uv_incremental_repository_tests.patch",
+      "sha256": "c7c64354760524117821a644c80d56b92a2312b618b7968ad2cc396a02121fdc",
+      "commit": "ddf47ffa92cb9485d18c4e6f0e39e3d166b411d6"
+    },
+    {
+      "order": 39,
+      "patch": "aspect_rules_py_reuse_group_sccs.patch",
+      "sha256": "267a00e90a18d51b4a3ca33e531cc07f688e71d7eb99ca968be23b0250bab97f",
+      "commit": "c72ad8b1e63a5511eab06f597bbf3caa051c16bb"
+    },
+    {
+      "order": 40,
+      "patch": "aspect_rules_py_cache_project_toml.patch",
+      "sha256": "c9f7023f6b8eb37b5137a1f7466ca209974ec66049abe67aeb62113a99a80750",
+      "commit": "7a95df5323c779088a2a7aa7328d0b27f86bc8e1"
+    },
+    {
+      "order": 41,
+      "patch": "aspect_rules_py_build_helper_bytecode.patch",
+      "sha256": "ee5548ca6c0414ff0acd2d76fae1ae8a76acb4c7e25339f8fa4cd02acade1dff",
+      "commit": "29826232ea9b9563d1f8d3aeb5d78f2738b2a3ff"
+    },
+    {
+      "order": 42,
+      "patch": "aspect_rules_py_multiversion_wheel_filters.patch",
+      "sha256": "582bc587c4d7bc5d1560ef0e177f9aa668335e08934f3b7ef30a151e7f4ac3c0",
+      "commit": "8021eb42771300cf73a974485ea9aa53cf07095d"
+    },
+    {
+      "order": 43,
+      "patch": "aspect_rules_py_multiversion_build_tools.patch",
+      "sha256": "29735132c5d1ceba9abd083f7ab37d0ef16e2c75d4f18b5c779ed3603830f33d",
+      "commit": "b051917f44872fe9c08854ce40397e173e49fa9e"
+    },
+    {
+      "order": 44,
+      "patch": "aspect_rules_py_locked_runtime_forks.patch",
+      "sha256": "5fbb624ca78f9dad310ab738e7518ac1d6cfe7570dedbda675e99dc91d06d01a",
+      "commit": "3634a0a98a128376b45e2ce4708832787d40fd6d"
+    }
+  ]
+}
