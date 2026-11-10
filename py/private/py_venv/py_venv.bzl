@@ -544,7 +544,7 @@ def _py_venv_lib_rule_impl(ctx):
 _py_venv_lib = rule(
     implementation = _py_venv_lib_rule_impl,
     attrs = _lib_attrs | {
-        "include_console_scripts": attr.bool(default = False),
+        "include_console_scripts": attr.bool(default = True),
         "_indexed_imports": attr.label(
             default = "//py:experimental_indexed_imports",
         ),
@@ -656,7 +656,7 @@ def py_binary_with_venv(py_rule, name, main, srcs = [], deps = [], data = [], im
 
     venv_kwargs = _split_kwargs_for_venv(kwargs, expose_venv)
     if not expose_venv:
-        venv_kwargs["include_console_scripts"] = kwargs.get("include_console_scripts", False)
+        venv_kwargs["include_console_scripts"] = kwargs.get("include_console_scripts", True)
     if type(freethreaded) == "bool":
         freethreaded = "true" if freethreaded else "false"
     if freethreaded != None:

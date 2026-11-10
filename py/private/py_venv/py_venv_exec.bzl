@@ -190,10 +190,10 @@ _attrs = dict({
         default = [],
     ),
     "include_console_scripts": attr.bool(
-        default = False,
+        default = True,
         doc = """Add the venv's wheel-declared `bin/<name>` console-script wrappers to this
-binary's runfiles so subprocesses can invoke them by name via `PATH`. Off by default: each
-wrapper is one action and one runfile per binary and most binaries never spawn one.""",
+binary's runfiles so subprocesses can invoke them by name via `PATH`. Enabled by default;
+set False for binaries that do not invoke wheel console scripts.""",
     ),
     "main": attr.label(
         allow_single_file = True,

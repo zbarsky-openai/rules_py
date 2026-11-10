@@ -137,7 +137,7 @@ def py_binary(name, srcs = [], main = None, **kwargs):
             underlying rule and the sibling py_venv. Three extras are
             handled by this macro:
 
-            * `include_console_scripts` (bool, default `False`) — when
+            * `include_console_scripts` (bool, default `True`) — when
               `True`, the binary's runfiles include the venv's
               wheel-declared `bin/<name>` console-script wrappers so
               subprocesses can invoke them by name via `PATH`.

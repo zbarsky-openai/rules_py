@@ -563,14 +563,12 @@ def assemble_venv(
     if console_script_tmpl != None:
         for name, target in console_scripts_map.items():
             script = ctx.actions.declare_file("{}/bin/{}".format(venv_name, name))
-            ctx.actions.expand_template(
-                template = console_script_tmpl,
+            content = ctx.actions.args()
+            content.add(target.script)
+            content.set_param_file_format("multiline")
+            ctx.actions.write(
                 output = script,
-                substitutions = {
-                    "{{name}}": name,
-                    "{{module}}": target.module,
-                    "{{func}}": target.func,
-                },
+                content = content,
                 is_executable = True,
             )
             console_scripts.append(script)

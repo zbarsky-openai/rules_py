@@ -532,7 +532,7 @@ def _resolve_console_scripts(cs_claimants, complain):
         distinct_sp = _last_per_sp(claimants)
         _complain_chain(complain, "console script", name, distinct_sp.keys())
         winner = distinct_sp.values()[-1]
-        console_scripts_map[name] = struct(module = winner.module, func = winner.func)
+        console_scripts_map[name] = winner
     return console_scripts_map
 
 def _ancestors(path):

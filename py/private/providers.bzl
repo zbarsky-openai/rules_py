@@ -104,6 +104,7 @@ _ConsoleScriptClaim = provider(fields = [
     "site_packages",
     "module",
     "func",
+    "script",
 ])
 
 def _validate_data_files(data_files, site_packages_rfpath, install_tree):
@@ -131,6 +132,21 @@ def _validate_data_files(data_files, site_packages_rfpath, install_tree):
             fail(("wheel {} declares the data file `{}`, which escapes the virtual " +
                   "environment prefix. PEP 427 `.data/data/` paths must be relative " +
                   "and free of `.`/`..` components.").format(site_packages_rfpath, path))
+
+# Render once per wheel so consuming venvs share the executable content.
+# Args adds the final newline when writing each wrapper.
+_CONSOLE_SCRIPT_TEMPLATE = """#!/bin/sh
+case $0 in
+    */*) script_dir=${0%/*} ;;
+    *) script_dir=. ;;
+esac
+exec "${script_dir}/python" -c 'import sys; from importlib import import_module; from operator import attrgetter; sys.argv[0] = "{{name}}"; sys.exit(attrgetter("{{func}}")(import_module("{{module}}"))())' "$@"
+""".removesuffix("\n")
+
+def _console_script(name, module, func):
+    script = _CONSOLE_SCRIPT_TEMPLATE.replace("{{name}}", name)
+    script = script.replace("{{module}}", module)
+    return script.replace("{{func}}", func)
 
 def make_wheel_record(
         *,
@@ -213,6 +229,7 @@ def make_wheel_record(
             site_packages = site_packages_rfpath,
             module = module,
             func = func,
+            script = _console_script(name, module, func),
         )))
 
     return _WheelRecord(
