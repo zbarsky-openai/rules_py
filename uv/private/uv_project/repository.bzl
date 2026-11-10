@@ -1,5 +1,5 @@
 load("//uv/private/pprint:defs.bzl", "indent", "pprint")
-load("//uv/private/uv_project:build_deps.bzl", "write_build_deps")
+load("//uv/private/uv_project:build_deps.bzl", "write_build_dep_records", "write_build_deps")
 load("//uv/private/uv_project:select_gen.bzl", "EMPTY_LIBRARY", "build_package_select_arms", "conditional_dep", "marker_interner", "safe_name", "write_markers")
 
 def _project_impl(repository_ctx):
@@ -164,6 +164,7 @@ exports_files(
         repository_ctx.file("available_deps.json", repository_ctx.attr.available_deps_json)
     if repository_ctx.attr.build_deps_json:
         repository_ctx.file("build_deps.json", repository_ctx.attr.build_deps_json)
+        write_build_dep_records(repository_ctx, json.decode(repository_ctx.attr.available_deps_json), build_deps)
 
     ################################0################################################
     # Now the slightly harder bit -- lay down the SCCs

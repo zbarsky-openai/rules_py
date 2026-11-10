@@ -958,6 +958,8 @@ def _uv_impl(module_ctx):
 
         if default_configure_interpreter:
             sbuild_kwargs["configure_interpreter"] = default_configure_interpreter
+            if not sbuild_cfg.build_tool:
+                sbuild_kwargs["dependency_records"] = "@{}//:BUILD.bazel".format(sbuild_cfg.project_id)
 
         if sbuild_cfg.pre_build_patches:
             sbuild_kwargs["pre_build_patches"] = sbuild_cfg.pre_build_patches

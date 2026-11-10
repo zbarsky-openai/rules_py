@@ -9,7 +9,7 @@ appropriate backend-specific build rule (e.g. pep517_whl, maturin_whl).
 load("//uv/private:normalize_name.bzl", "normalize_name")
 load("//uv/private/extension:graph_utils.bzl", "exclude_build_dep", "reachable_build_deps")
 load("//uv/private/sdist_configure:defs.bzl", "DEFAULT_CONFIGURE_SCRIPT")
-load("//uv/private/uv_project:build_deps.bzl", "write_build_deps")
+load("//uv/private/uv_project:build_deps.bzl", "read_build_dep_records", "write_build_deps")
 load(":attrs.bzl", "validate_build_attrs")
 
 # --- Configure tool invocation ---
@@ -188,14 +188,27 @@ def _sdist_build_impl(repository_ctx):
     """
 
     build_tool = repository_ctx.attr.build_tool
-    available_deps = {} if build_tool else json.decode(repository_ctx.read(repository_ctx.attr.available_deps_file))
+    archive_path = _resolve_archive_path(repository_ctx)
+    if archive_path:
+        repository_ctx.watch(archive_path)
+    use_records = not build_tool and repository_ctx.attr.configure_interpreter and repository_ctx.attr.dependency_records
+    inspection = None
+    available_deps = {}
     build_deps = None
+    if use_records:
+        inspection = _run_configure_tool(repository_ctx, archive_path, {}) if archive_path else None
+        if inspection:
+            names = sorted({name: True for name in inspection["build_requires"] + inspection["inferred_build_requires"]})
+            available_deps, build_deps = read_build_dep_records(repository_ctx, repository_ctx.attr.dependency_records, names)
+    elif not build_tool:
+        available_deps = json.decode(repository_ctx.read(repository_ctx.attr.available_deps_file))
+        if repository_ctx.attr.build_deps_file:
+            build_deps = json.decode(repository_ctx.read(repository_ctx.attr.build_deps_file))
     packages = {}
     graph = {}
-    if not build_tool and repository_ctx.attr.build_deps_file:
+    if build_deps != None:
         if not repository_ctx.attr.package_install:
-            fail("build_deps_file requires the package_install label of the package being built")
-        build_deps = json.decode(repository_ctx.read(repository_ctx.attr.build_deps_file))
+            fail("Build dependency metadata requires the package_install label of the package being built")
         packages, graph = exclude_build_dep(
             build_deps["packages"],
             build_deps["scc_graph"],
@@ -207,10 +220,16 @@ def _sdist_build_impl(repository_ctx):
     }
     available_deps.update(without_self)
     is_native_override = repository_ctx.attr.is_native
-    archive_path = _resolve_archive_path(repository_ctx)
-    if archive_path:
-        repository_ctx.watch(archive_path)
-    inspection = _run_configure_tool(repository_ctx, archive_path, available_deps) if archive_path else None
+    if use_records:
+        if inspection:
+            provided_labels = {str(dep): True for dep in repository_ctx.attr.deps}
+            inspection["extra_deps"] = [
+                name
+                for name in names
+                if name in available_deps and available_deps[name] not in provided_labels
+            ]
+    else:
+        inspection = _run_configure_tool(repository_ctx, archive_path, available_deps) if archive_path else None
 
     if is_native_override == "auto":
         if inspection != None:
@@ -423,6 +442,9 @@ sdist_build = repository_rule(
         "build_deps_file": attr.label(
             allow_single_file = [".json"],
             doc = "Optional shared build graph used to exclude transitive self dependencies after this sdist is requested.",
+        ),
+        "dependency_records": attr.label(
+            doc = "Project BUILD file locating per-requirement records for the bundled configure tool.",
         ),
         "package_install": attr.string(
             doc = "Exact install label of the package being built; required with build_deps_file.",

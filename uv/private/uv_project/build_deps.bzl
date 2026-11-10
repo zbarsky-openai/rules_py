@@ -1,5 +1,6 @@
 """Render a build-dependency graph in a project or source-build repository."""
 
+load("//uv/private/extension:graph_utils.bzl", "reachable_build_deps")
 load("//uv/private/pprint:defs.bzl", "indent", "pprint")
 load("//uv/private/uv_project:select_gen.bzl", "EMPTY_LIBRARY", "conditional_dep", "marker_interner", "safe_name", "write_markers")
 
@@ -10,6 +11,37 @@ unresolved_build_requirement = rule(
     implementation = _unresolved_build_requirement_impl,
     attrs = {"requirement": attr.string(mandatory = True)},
 )
+
+def write_build_dep_records(repository_ctx, available_deps, build_deps):
+    """Write each requirement's label, candidates, and complete build closure."""
+    packages = build_deps["packages"]
+    graph = build_deps["scc_graph"]
+    for name in sorted({name: True for name in list(available_deps) + list(packages)}):
+        candidates = packages.get(name, [])
+        repository_ctx.file("build_deps_records/" + name + ".json", json.encode({
+            "label": available_deps.get(name),
+            "candidates": candidates,
+            "scc_graph": reachable_build_deps({name: candidates}, graph),
+        }))
+
+def read_build_dep_records(repository_ctx, anchor, names):
+    """Read only discovered requirements, watching absent names too."""
+    # The exported BUILD file locates the records; its contents are not an input.
+    root = repository_ctx.path(anchor).dirname
+    available_deps = {}
+    packages = {}
+    graph = {}
+    for name in names:
+        record = root.get_child("build_deps_records", name + ".json")
+        repository_ctx.watch(record)
+        if record.exists:
+            data = json.decode(repository_ctx.read(record))
+            if data["label"]:
+                available_deps[name] = data["label"]
+            if data["candidates"]:
+                packages[name] = data["candidates"]
+            graph.update(data["scc_graph"])
+    return available_deps, {"packages": packages, "scc_graph": graph}
 
 def write_build_deps(repository_ctx, packages, scc_graph, marker_fn = None):
     """Write the build requirements and their SCC dependency graph.
