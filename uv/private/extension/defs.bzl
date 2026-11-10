@@ -63,7 +63,6 @@ load("//uv/private/sdist_build:attrs.bzl", "validate_build_attrs")
 load("//uv/private/sdist_build:repository.bzl", "sdist_build")
 load("//uv/private/uv_hub:repository.bzl", "uv_hub")
 load("//uv/private/uv_project:repository.bzl", "declare_project")
-load("//uv/private/uv_project:select_gen.bzl", "project_package_label")
 load("//uv/private/whl_install:dist_repository.bzl", "whl_dist")
 load("//uv/private/whl_install:metadata.bzl", "parse_console_script")
 load("//uv/private/whl_install:repository.bzl", "whl_install")
@@ -305,7 +304,7 @@ def _parse_projects(module_ctx, declared_hubs):
             def _resolve(package):
                 name = normalize_name(package["name"])
                 if "version" in package:
-                    return (project_id, name, package["version"], "__base__")
+                    return package_versions.get(name, {}).get(package["version"])
                 return default_versions.get(name)
 
             lock_build_dep_anns = {}
@@ -326,11 +325,15 @@ def _parse_projects(module_ctx, declared_hubs):
                             deps = []
                             skip = False
                             for dep in package["build-dependencies"]:
-                                resolved = _resolve(dep)
-                                if resolved == None:
+                                name = normalize_name(dep["name"])
+                                versions = package_versions.get(name, {})
+                                pin = dep.get("version")
+                                if pin != None and (len(versions) != 1 or pin not in versions):
+                                    fail("Build annotation for {} in {} requires {}=={} as the only locked release, found {}.".format(package["name"], project_id, name, pin, sorted(versions)))
+                                if not versions:
                                     skip = True
-                                    break
-                                deps.append(resolved)
+                                    continue
+                                deps.append(name)
                             if not skip:
                                 lock_build_dep_anns[k] = deps
 
@@ -503,10 +506,8 @@ def _parse_projects(module_ctx, declared_hubs):
                     if not changed:
                         break
 
-            def build_dep_label(dep):
-                name = dep[1]
-                label = project_package_label(name) if name in marked_package_cfg_sccs else "//:" + name
-                return "@" + project_id + label
+            def build_dep_label(name):
+                return "@{}//private/build_deps/packages/{}:{}".format(project_id, name, name)
 
             project_has_sbuilds = False
             default_exclusions = merge_exclude_globs(project.default_exclude_glob, (), True)
@@ -575,7 +576,7 @@ def _parse_projects(module_ctx, declared_hubs):
                             # A target platform without a matching wheel can still need a fallback.
                             sbuild_required = is_no_binary or not package.get("wheels", [])
                             lock_build_deps = {
-                                dep: build_dep_label(dep)
+                                dep[1]: build_dep_label(dep[1])
                                 for req in project.default_build_dependencies
                                 for dep, _ in extract_requirement_marker_pairs(project.lock, req, default_versions, package_versions, fail_if_missing = sbuild_required)
                             }
