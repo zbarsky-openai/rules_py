@@ -795,5 +795,107 @@ class StaticRuntimeArchivesTest(unittest.TestCase):
 
 
 
+class NativeDependencyResponseFilesTest(unittest.TestCase):
+    def test_wrappers_preserve_native_headers_and_archive_order(self) -> None:
+        import json
+        import shlex
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            compiler = path.join(tmp, "echo_cc")
+            with open(compiler, "w") as stream:
+                stream.write('#!/bin/sh\nprintf \'%s\\n\' "$@"\n')
+            os.chmod(compiler, 0o755)
+            cppflags_file = path.join(tmp, "cppflags.json")
+            linkflags_file = path.join(tmp, "linkflags.json")
+            with open(cppflags_file, "w") as stream:
+                json.dump(["-I$(EXECROOT)/native headers", "-DNATIVE_FIXTURE=1"], stream)
+            with open(linkflags_file, "w") as stream:
+                json.dump(["$(EXECROOT)/native archives/libfixture.a", "-pthread"], stream)
+            for cross, target_os in ((False, "linux"), (True, "linux"), (True, "darwin")):
+                with self.subTest(cross=cross, target_os=target_os), patch.dict(os.environ, {
+                    "PATH": os.environ["PATH"],
+                    "CC": compiler,
+                    "CXX": compiler,
+                    "ASPECT_RULES_PY_NATIVE_CPPFLAGS_FILE": cppflags_file,
+                    "ASPECT_RULES_PY_NATIVE_LINK_FLAGS_FILE": linkflags_file,
+                }, clear=True):
+                    env = build_helper._compiler_env(tmp, cross=cross, target_os=target_os, target_cpu="aarch64")
+                cppflags = shlex.split(env.get("CPPFLAGS", ""))
+                self.assertEqual(len(cppflags), 1)
+                self.assertTrue(cppflags[0].startswith("@"))
+                with open(cppflags[0][1:]) as stream:
+                    self.assertEqual(shlex.split(stream.read()), [
+                        "-I" + path.join(os.getcwd(), "native headers"), "-DNATIVE_FIXTURE=1",
+                    ])
+                for key in ("CC", "CXX"):
+                    with self.subTest(compiler=key):
+                        argv = _run_wrapper(env[key], ["-shared", "extension.o"])
+                        responses = [arg for arg in argv if arg.startswith("@")]
+                        self.assertEqual(len(responses), 1)
+                        self.assertGreater(argv.index(responses[0]), argv.index("extension.o"))
+                        with open(responses[0][1:]) as stream:
+                            self.assertEqual(shlex.split(stream.read()), [
+                                path.join(os.getcwd(), "native archives/libfixture.a"), "-pthread",
+                            ])
+                        for flag in ("-c", "-E", "-S", "-M", "-MM", "-fsyntax-only", "--version", "-dumpmachine", "-dumpversion", "-###", "-print-search-dirs"):
+                            with self.subTest(flag=flag):
+                                self.assertFalse(any(arg.startswith("@") for arg in _run_wrapper(env[key], [flag, "extension.c"])))
+
+
+class CompilerResponseFilesTest(unittest.TestCase):
+    def test_nested_response_modes_preserve_argv_and_link_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            compiler = path.join(tmp, "echo_cc")
+            with open(compiler, "w") as stream:
+                stream.write('#!/bin/sh\nprintf \'%s\\n\' "$@"\n')
+            os.chmod(compiler, 0o755)
+            nested = path.join(tmp, "nested flags.rsp")
+            response = path.join(tmp, "compile.rsp")
+            wrappers = [
+                ("native", build_helper._make_compiler_wrapper(
+                    tmp, "native", compiler, compile_flags=["COMPILE_ONLY"],
+                    shared_link_flags=["SHARED_ONLY"], exe_link_flags=["EXE_ONLY"],
+                    native_link_flags=["NATIVE_ARCHIVE"],
+                )),
+            ]
+            for darwin in (False, True):
+                wrappers.append(("cross-darwin" if darwin else "cross-linux", build_helper._make_cross_compiler_wrapper(
+                    tmp, "cross-" + str(darwin), compiler, [], is_darwin=darwin,
+                    static_runtime_archives=["CXX_ARCHIVE"], exe_link_flags=["EXE_ONLY"],
+                    native_link_flags=["NATIVE_ARCHIVE"],
+                )))
+            for name, wrapper in wrappers:
+                for mode in ("-c", "-E", "-S", "-M", "-MM", "-fsyntax-only", "--version", "-v", "-shared"):
+                    with self.subTest(wrapper=name, mode=mode):
+                        with open(nested, "w") as stream:
+                            stream.write('"' + mode + '"')
+                        with open(response, "w") as stream:
+                            stream.write('"@' + nested + '"' + (' "source with spaces.c"' if mode != "-v" else ""))
+                        argv = _run_wrapper(wrapper, ["@" + response])
+                        self.assertIn("@" + response, argv)
+                        self.assertNotIn("source with spaces.c", argv)
+                        self.assertEqual("NATIVE_ARCHIVE" in argv, mode == "-shared")
+                        if mode != "-shared":
+                            self.assertNotIn("CXX_ARCHIVE", argv)
+                            self.assertNotIn("EXE_ONLY", argv)
+                        elif name == "native":
+                            self.assertIn("SHARED_ONLY", argv)
+                            self.assertNotIn("EXE_ONLY", argv)
+                        else:
+                            self.assertIn("CXX_ARCHIVE", argv)
+                            if name == "cross-darwin":
+                                self.assertIn("-Wl,-undefined,dynamic_lookup", argv)
+                with self.subTest(wrapper=name, probe="bare -v"):
+                    argv = _run_wrapper(wrapper, ["-v"])
+                    self.assertNotIn("NATIVE_ARCHIVE", argv)
+                    self.assertNotIn("CXX_ARCHIVE", argv)
+                    self.assertNotIn("EXE_ONLY", argv)
+                for args in (["-v", "extension.o"], ["-v", "-shared", "extension.o"]):
+                    with self.subTest(wrapper=name, verbose_link=args):
+                        argv = _run_wrapper(wrapper, args)
+                        self.assertGreater(argv.index("NATIVE_ARCHIVE"), argv.index("extension.o"))
+
+
 if __name__ == "__main__":
     unittest.main()

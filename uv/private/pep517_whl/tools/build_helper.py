@@ -38,39 +38,112 @@ _SETUPTOOLS_BACKENDS = (
 # argv[0] must name the resolved driver because compilers may use its directory
 # to locate sibling tools and resources. Clang does so under -no-canonical-prefixes:
 # https://github.com/llvm/llvm-project/blob/llvmorg-22.1.4/clang/tools/driver/driver.cpp#L63-L78
+# Inspect GNU-style response files without expanding the argv passed to exec:
+# native dependency closures can exceed the operating system's argument limit.
+_COMPILER_WRAPPER_HELPERS = r"""
+def _compiler_mode(args):
+    if any(arg in ("-c", "-E", "-S", "-M", "-MM", "-fsyntax-only") for arg in args):
+        return "compile"
+    # Bare -v is a version probe; -v with build inputs must still link.
+    if args == ["-v"] or any(
+        arg in ("--version", "-dumpmachine", "-dumpversion", "-###") or arg.startswith("-print-")
+        for arg in args
+    ):
+        return "probe"
+    return "link"
+
+def _has_compile_input(args):
+    language = "none"
+    operands = iter(args)
+    for arg in operands:
+        if arg == "-x":
+            language = next(operands, "none")
+        elif arg.startswith("-x"):
+            language = arg[2:]
+        elif arg in ("-o", "-I", "-L", "-l", "-B", "-isystem", "-iquote", "-idirafter", "-include", "-imacros", "-isysroot", "--sysroot", "-target", "--target", "-Xclang", "-Xlinker", "-Xpreprocessor", "-MF", "-MT", "-MQ"):
+            next(operands, None)
+        elif not arg.startswith("-") or arg == "-":
+            if language != "none" or arg.endswith((".c", ".C", ".cc", ".cp", ".cpp", ".cxx", ".c++", ".m", ".mm", ".i", ".ii", ".s", ".S")):
+                return True
+    return False
+
+def _response_tokens(text):
+    # Match LLVM TokenizeGNUCommandLine: backslashes escape inside either quote.
+    token, quote, started = [], None, False
+    chars = iter(text)
+    for char in chars:
+        if char == "\\":
+            token.append(next(chars, "\\"))
+        elif quote:
+            if char == quote:
+                quote = None
+            else:
+                token.append(char)
+        elif char in ("'", '"'):
+            quote = char
+        elif char in " \t\r\n":
+            if started:
+                yield "".join(token)
+            token, started = [], False
+            continue
+        else:
+            token.append(char)
+        started = True
+    if started:
+        yield "".join(token)
+
+def _response_args(args, active=()):
+    for arg in args:
+        filename = os.path.realpath(arg[1:]) if arg.startswith("@") else None
+        # Leave missing/cyclic files to the compiler's own diagnostics.
+        if filename is None or filename in active or not os.path.isfile(filename):
+            yield arg
+            continue
+        with open(filename, encoding="utf-8-sig", errors="surrogateescape") as stream:
+            yield from _response_args(_response_tokens(stream.read()), active + (filename,))
+"""
+
+
 _DEBUG_FLAG = "-fdebug-default-version=4"
 _COMPILER_WRAPPER = """#!/usr/bin/env python3
 import os
 import sys
 
+{wrapper_helpers}
+argument_flags = list(_response_args(sys.argv[1:]))
 filtered_args = [arg for arg in sys.argv[1:] if arg != "{debug_flag}"]
 sysroot = {sysroot!r}
 compile_flags = {compile_flags!r}
 shared_link_flags = {shared_link_flags!r}
 exe_link_flags = {exe_link_flags!r}
+native_link_flags = {native_link_flags!r}
 has_sysroot = any(
     arg in ("-isysroot", "--sysroot") or arg.startswith("--sysroot=")
-    for arg in filtered_args
+    for arg in argument_flags
 )
 if sysroot and not has_sysroot:
     sysroot_args = (["-isysroot", sysroot] if sys.platform == "darwin"
                     else ["--sysroot=" + sysroot])
     filtered_args = sysroot_args + filtered_args
-is_compile = any(arg in ("-c", "-E", "-S", "-fsyntax-only") for arg in filtered_args)
+mode = _compiler_mode(argument_flags)
+is_compile = mode == "compile"
+is_link = mode == "link"
+if is_link:
+    filtered_args += native_link_flags
 if sys.platform.startswith("linux"):
-    if is_compile:
+    if is_compile or (is_link and _has_compile_input(argument_flags)):
         filtered_args = compile_flags + filtered_args
-    elif "-shared" in filtered_args:
+    if is_link and "-shared" in argument_flags:
         # Libraries follow the backend's objects, so --as-needed retains them.
         filtered_args += shared_link_flags
-    else:
+    elif is_link:
         filtered_args += exe_link_flags
 compiler_path = "{compiler_path}"
 linker_path = os.path.join(os.path.dirname(compiler_path), "ld.lld")
 if (
     sys.platform.startswith("linux")
-    and not is_compile
-    and not any(arg.startswith("-fuse-ld=") for arg in filtered_args)
+    and is_link
+    and not any(arg.startswith("-fuse-ld=") for arg in argument_flags)
     and os.path.isfile(linker_path)
 ):
     filtered_args.insert(0, "-fuse-ld=" + linker_path)
@@ -146,17 +219,20 @@ def _make_compiler_wrapper(
     compile_flags: list[str] | None = None,
     shared_link_flags: list[str] | None = None,
     exe_link_flags: list[str] | None = None,
+    native_link_flags: list[str] | None = None,
 ) -> str:
     wrapper = path.join(tmpdir, ".aspect_rules_py_compilers", name)
     makedirs(path.dirname(wrapper), exist_ok=True)
     with open(wrapper, "w") as f:
         f.write(_COMPILER_WRAPPER.format(
+            wrapper_helpers=_COMPILER_WRAPPER_HELPERS,
             debug_flag=_DEBUG_FLAG,
             compiler_path=compiler_path,
             sysroot=sysroot,
             compile_flags=compile_flags or [],
             shared_link_flags=shared_link_flags or [],
             exe_link_flags=exe_link_flags or [],
+            native_link_flags=native_link_flags or [],
         ))
     chmod(wrapper, 0o755)
     return wrapper
@@ -346,7 +422,9 @@ _CROSS_COMPILER_WRAPPER = """#!/usr/bin/env python3
 import os
 import sys
 
+{wrapper_helpers}
 args = sys.argv[1:]
+argument_flags = list(_response_args(args))
 wrapper_flags = {wrapper_flags!r}
 drop_exact = {drop_exact!r}
 drop_pairs = {drop_pairs!r}
@@ -355,15 +433,9 @@ debug_flag = {debug_flag!r}
 is_darwin = {is_darwin!r}
 static_runtime_archives = {static_runtime_archives!r}
 exe_link_flags = {exe_link_flags!r}
+native_link_flags = {native_link_flags!r}
 
-# Not a link if compiling/preprocessing (-c/-E/-S/-fsyntax-only) or if this
-# is a compiler-introspection probe ("-print-*", "--version"): appending
-# link-only flags there is noise at best.
-is_link = True
-for a in args:
-    if a in ("-c", "-E", "-S", "-fsyntax-only", "--version", "-dumpmachine", "-dumpversion", "-###") or a.startswith("-print-"):
-        is_link = False
-        break
+is_link = _compiler_mode(argument_flags) == "link"
 
 filtered = []
 i = 0
@@ -381,7 +453,9 @@ while i < len(args):
 # Shared-link spellings: "-shared" (ELF), "-bundle"/"-dynamiclib" (ld64).
 # Scanned pre-filter: the darwin spellings are host-leak-dropped from
 # `filtered` when the target is not darwin.
-is_shared = any(a in ("-shared", "-bundle", "-dynamiclib") for a in args)
+is_shared = any(a in ("-shared", "-bundle", "-dynamiclib") for a in argument_flags)
+if is_link:
+    filtered.extend(native_link_flags)
 if is_link and is_shared and static_runtime_archives:
     # A -nostdlib++ toolchain (the BCR llvm module) carries its C++/unwind
     # runtime as toolchain inputs, never as link flags: without these
@@ -430,6 +504,7 @@ def _make_cross_compiler_wrapper(
     is_darwin: bool = False,
     static_runtime_archives: list[str] | None = None,
     exe_link_flags: list[str] | None = None,
+    native_link_flags: list[str] | None = None,
 ) -> str:
     wrapper = path.join(tmpdir, ".aspect_rules_py_compilers", name)
 
@@ -446,6 +521,7 @@ def _make_cross_compiler_wrapper(
     return _write_generated_file(
         wrapper,
         _CROSS_COMPILER_WRAPPER.format(
+            wrapper_helpers=_COMPILER_WRAPPER_HELPERS,
             compiler_path=compiler_path,
             wrapper_flags=wrapper_flags,
             drop_exact=sorted(drop_exact),
@@ -455,6 +531,7 @@ def _make_cross_compiler_wrapper(
             is_darwin=is_darwin,
             static_runtime_archives=list(static_runtime_archives or []),
             exe_link_flags=list(exe_link_flags or []),
+            native_link_flags=list(native_link_flags or []),
         ),
         executable=True,
     )
@@ -609,6 +686,17 @@ def _generate_cross_site(
     return site_dir
 
 
+def _native_response_file(tmpdir: str, name: str, flags_file: str) -> str:
+    # Keep dependency closures out of exec's environment and argument size limits.
+    with open(flags_file) as f:
+        flags = [flag.replace("$(EXECROOT)", os.getcwd()) for flag in json.load(f)]
+    response = path.join(tmpdir, ".aspect_rules_py_compilers", name + ".rsp")
+    makedirs(path.dirname(response), exist_ok=True)
+    with open(response, "w") as f:
+        f.write(" ".join('"' + flag.replace("\\", "\\\\").replace('"', '\\"') + '"' for flag in flags))
+    return "@" + response
+
+
 def _compiler_env(
     tmpdir: str,
     execroot_marker: str | None = None,
@@ -673,6 +761,15 @@ def _compiler_env(
     # changes into the unpacked source distribution.
     sysroot = _absolutize_path(env["SYSROOT"]) if env.get("SYSROOT") else _darwin_sysroot()
 
+    native_cppflags_file = env.pop("ASPECT_RULES_PY_NATIVE_CPPFLAGS_FILE", None)
+    if native_cppflags_file:
+        key = env.pop("ASPECT_RULES_PY_NATIVE_CPPFLAGS_ENV", "CPPFLAGS")
+        env[key] = shlex.quote(_native_response_file(tmpdir, key, native_cppflags_file))
+    native_link_flags = []
+    native_link_file = env.pop("ASPECT_RULES_PY_NATIVE_LINK_FLAGS_FILE", None)
+    if native_link_file:
+        native_link_flags.append(_native_response_file(tmpdir, "native-link", native_link_file))
+
     if cross:
         # Toolchain flag strings (from cc_layer.bzl) contain execroot-relative
         # sysroots; absolutize while still in the execroot, before the backend
@@ -720,20 +817,20 @@ def _compiler_env(
         runtime_rank = {"libc++.a": 0, "libc++abi.a": 1, "libunwind.a": 2}
         static_runtime.sort(key=lambda p: runtime_rank.get(path.basename(p), 3))
 
-        cc = _make_cross_compiler_wrapper(tmpdir, "cc", cc_path, wrapper_flags, is_darwin=is_darwin_target, static_runtime_archives=static_runtime, exe_link_flags=exe_link_flags)
-        cxx = _make_cross_compiler_wrapper(tmpdir, "c++", cxx_path, wrapper_flags, is_darwin=is_darwin_target, static_runtime_archives=static_runtime, exe_link_flags=exe_link_flags)
+        cc = _make_cross_compiler_wrapper(tmpdir, "cc", cc_path, wrapper_flags, is_darwin=is_darwin_target, static_runtime_archives=static_runtime, exe_link_flags=exe_link_flags, native_link_flags=native_link_flags)
+        cxx = _make_cross_compiler_wrapper(tmpdir, "c++", cxx_path, wrapper_flags, is_darwin=is_darwin_target, static_runtime_archives=static_runtime, exe_link_flags=exe_link_flags, native_link_flags=native_link_flags)
     else:
         shared_link_flags = json.loads(env.pop("ASPECT_RULES_PY_SHARED_LINK_FLAGS", "[]"))
         exe_link_flags = json.loads(env.pop("ASPECT_RULES_PY_EXE_LINK_FLAGS", "[]"))
         cc = _make_compiler_wrapper(
             tmpdir, "cc", cc_path, sysroot,
             json.loads(env.pop("ASPECT_RULES_PY_C_COMPILE_FLAGS", "[]")),
-            shared_link_flags, exe_link_flags,
+            shared_link_flags, exe_link_flags, native_link_flags,
         )
         cxx = _make_compiler_wrapper(
             tmpdir, "c++", cxx_path, sysroot,
             json.loads(env.pop("ASPECT_RULES_PY_CXX_COMPILE_FLAGS", "[]")),
-            shared_link_flags, exe_link_flags,
+            shared_link_flags, exe_link_flags, native_link_flags,
         )
 
     env.setdefault("CC", cc)
