@@ -227,9 +227,10 @@ def _python_interpreters_impl(module_ctx):
                 if date == "latest":
                     is_reproducible = False
                     date = _resolve_latest(module_ctx, base_url)
-                if len(date) != 8 or not is_decimal(date):
+                invalid_sha_chars = [char for char in date.elems() if char not in "0123456789abcdef"]
+                if not ((len(date) == 8 and is_decimal(date)) or (len(date) == 40 and not invalid_sha_chars)):
                     fail(
-                        "PBS release identifiers must be eight decimal digits, got '{}'".format(date),
+                        "PBS release identifiers must be eight decimal digits or a 40-character commit SHA, got '{}'".format(date),
                     )
                 if date not in release_dates:
                     release_dates.append(date)
