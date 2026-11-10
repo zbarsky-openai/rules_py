@@ -3,13 +3,16 @@ load("@aspect_rules_py//uv/private/pep517_whl:pep517_native_whl.bzl", "pep517_na
 load("@aspect_rules_py//uv/private/pep517_whl:frontend.bzl", "pep517_frontend")
 load("@aspect_rules_py//py:defs.bzl", "py_binary")
 
+
 py_binary(
     name = "build_tool",
     main = "@aspect_rules_py//uv/private/pep517_whl/tools:build_helper.py",
     srcs = ["@aspect_rules_py//uv/private/pep517_whl/tools:build_helper.py"],
-    deps = ["@@aspect_rules_py++uv+project__uv_sdist_jdk_build//:scikit_build_core", "@@aspect_rules_py++uv+project__uv_sdist_jdk_build//:setuptools", "@@aspect_rules_py++uv+project__uv_sdist_jdk_build//:wheel", "@@aspect_rules_py++uv+project__uv_sdist_jdk_build//:build", "@project__uv_sdist_jdk_build//private/build_deps:scikit_build_core"],
+    deps = ["@@aspect_rules_py++uv+project__uv_sdist_jdk_build//private/distributions/scikit_build_core:scikit_build_core", "@@aspect_rules_py++uv+project__uv_sdist_jdk_build//private/distributions/setuptools:setuptools", "@@aspect_rules_py++uv+project__uv_sdist_jdk_build//private/distributions/wheel:wheel", "@@aspect_rules_py++uv+project__uv_sdist_jdk_build//private/distributions/build:build", "@@aspect_rules_py++uv+project__uv_sdist_jdk_build//private/build_deps/packages/scikit_build_core:scikit_build_core"],
     include_console_scripts = True,
+    indexed_imports = False,
 )
+
 
 pep517_frontend(
     name = "frontend",

@@ -132,41 +132,20 @@ py_binary(
 )
 ```
 
-Targets that need every dependency in one dependency group can use the
-group-specific lists generated in `defs.bzl`. The `group_deps()` helper follows
-the consuming target's `dep_group`, so the group name is never repeated:
+Each dependency group exports its packages as an ordered list of labels.
+Load the list and set the same group on the consuming target.
 
 ```starlark
-load("@pypi//:defs.bzl", "group_deps")
+load("@pypi//dep_group:deps/vendored_say.bzl", "DEPS")
 
 py_binary(
     name = "all_vendored",
     dep_group = "vendored_say",
-    deps = group_deps(),  # resolves to vendored_say's dependencies
+    deps = DEPS,
 )
 ```
 
-`group_deps()` returns a `select()` keyed on the active `dep_group`; if no
-`dep_group` is set it fails with the list of known groups. It is a function so
-future options (such as PEP 508 package extras) can be added as arguments
-without breaking callers.
-
-Macros that must inspect membership while loading a BUILD file can use
-`group_deps_for(name)`, which returns the membership of one explicit group as
-sorted `Label` values and fails if the group is unknown. Read `Label.package`
-off the results for normalized names, or pass the labels as `deps` to pin one
-group. The aliases still resolve according to the active `dep_group`, so a
-target using these labels as `deps` must set the matching group itself. Prefer
-`group_deps()` for ordinary rule attributes so the dependency list follows the
-consuming target's group automatically.
-
-`all_requirements` (in `requirements.bzl`) remains the hub-wide union for
-compatibility with `rules_python`. Under a dependency-group transition, that
-union may contain targets which are incompatible with the selected group, so
-use the group-specific helpers above when the consuming target sets
-`dep_group`. This per-group API has no `rules_python` equivalent, so it lives
-in the rules_py native `defs.bzl` rather than the `rules_python`-compatible
-`requirements.bzl`.
+For the union of all groups, load `all_requirements` from `@pypi//:requirements.bzl`.
 
 ## The `uv` binary
 
@@ -280,12 +259,12 @@ But sometimes you want a library to be incompatible with a dependency group;
 either because it depends on packages at versions below what are available in
 that dependency group or as part of an internal migration or for some other reason.
 
-As a facility each hub's `@<hub>//:defs.bzl` provides a pair of helper macros
+As a facility each hub's `@<hub>//:compatibility.bzl` provides a pair of helper macros
 for generating appropriate `target_compatible_with` logics. These helpers return
 case dicts which may either be manipulated or `select()`ed on.
 
 ```
-load("@pypi//:defs.bzl", "compatible_with", "incompatible_with")
+load("@pypi//:compatibility.bzl", "compatible_with", "incompatible_with")
 
 py_library(
   name = "requires_prod",

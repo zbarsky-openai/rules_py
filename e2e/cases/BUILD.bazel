@@ -32,50 +32,34 @@ write_source_files(
         # `config_setting` rules — one per `uv.project()` call. Catches
         # regressions in the public dep_group surface for N>1 projects.
         "snapshots/pypi_multi.dep_group.BUILD.bazel": "@pypi_multi//dep_group:BUILD.bazel",
-        # uv_hub: rules_py-native helpers for a multi-project hub. Pins the
-        # group_deps() select() — the per-group package lists that discriminate
-        # between projects (the single-project pypi_single.defs.bzl snapshot
-        # collapses this to one all-inclusive group, so only this entry
-        # exercises the per-dep_group membership filter).
-        "snapshots/pypi_multi.defs.bzl": "@pypi_multi//:defs.bzl",
+        # The shared cowsay package appears in every group that contains it.
+        "snapshots/pypi_multi.compatibility.bzl": "@pypi_multi//:compatibility.bzl",
+        "snapshots/pypi_multi.deps.beta.bzl": "@pypi_multi//dep_group:deps/beta.bzl",
+        "snapshots/pypi_multi.deps.dev.bzl": "@pypi_multi//dep_group:deps/dev.bzl",
+        "snapshots/pypi_multi.deps.gamma.bzl": "@pypi_multi//dep_group:deps/gamma.bzl",
+        "snapshots/pypi_multi.deps.unit-tests.bzl": "@pypi_multi//dep_group:deps/unit-tests.bzl",
 
         # @pypi_single (single-project baseline)
         # ----------------------------------------------------------------
-        # uv_hub: public helpers consumed via @pypi_single//:defs.bzl. Pins
-        # the single-entry VIRTUALENVS list, _repo string, and the
-        # compatible_with helpers in their minimal form.
-        "snapshots/pypi_single.defs.bzl": "@pypi_single//:defs.bzl",
+        "snapshots/pypi_single.compatibility.bzl": "@pypi_single//:compatibility.bzl",
+        "snapshots/pypi_single.deps.single_project_hub.bzl": "@pypi_single//dep_group:deps/single_project_hub.bzl",
         # uv_hub: rules_python-compat shim. Pins the canonical-name format
         # used by the requirement() helper for a single-project hub.
         "snapshots/pypi_single.requirements.bzl": "@pypi_single//:requirements.bzl",
         # uv_hub: per-package alias with N=1 select arm — the minimal
         # shape that the multi-arm @pypi_multi//cowsay snapshot generalizes.
         "snapshots/pypi_single.cowsay.BUILD.bazel": "@pypi_single//cowsay:BUILD.bazel",
-        # uv_hub: dep_group config_settings with a single entry — the
-        # minimal shape that the 38-entry @pypi_multi//dep_group snapshot scales.
+        # The single-project hub exports one dep_group config_setting.
         "snapshots/pypi_single.dep_group.BUILD.bazel": "@pypi_single//dep_group:BUILD.bazel",
-        # uv_project: package-name → SCC alias map for one project. Pins
-        # how a one-package surface (cowsay only) is wired into the SCC
-        # graph.
-        "snapshots/project_single.BUILD.bazel": "@project__single_project_hub//:BUILD.bazel",
-        # uv_project: SCC py_library definitions. With a single non-cyclic
-        # dep, this snapshot pins the simplest possible SCC partition.
-        "snapshots/project_single.private.sccs.BUILD.bazel": "@project__single_project_hub//private/sccs:BUILD.bazel",
-        # uv_project: decide_marker rules. cowsay has no version-conditional
-        # deps, so this snapshot pins the zero-marker shape — useful as a
-        # lower-bound check that the file still gets emitted with no entries.
-        "snapshots/project_single.private.markers.BUILD.bazel": "@project__single_project_hub//private/markers:BUILD.bazel",
+        # The one-project fixture selects cowsay unconditionally. The project
+        # root and its wheel/SCC declarations are separate generated files.
+        "snapshots/project_single.surface.BUILD.bazel": "@project__single_project_hub//:BUILD.bazel",
+        "snapshots/project_single.cowsay.bzl": "@project__single_project_hub__distribution_cowsay//:defs.bzl",
+        "snapshots/project_single.empty_marker.bzl": "@project__single_project_hub__marker_0//:defs.bzl",
 
-        # uv_project: extra activated through a dependency group. The `ci`
-        # group requests the project's own `build` extra (extra-marker[build]),
-        # which pulls in colorama gated by `extra == 'build'`. That marker is
-        # tautological once the extra is active and must be resolved away, or
-        # colorama gets dropped at runtime. This snapshot pins the resolved
-        # shape: the sccs file depends on `//:colorama` directly. Regressing the
-        # fix reintroduces the `extra == 'build'` marker and a `select(... :empty)`
-        # gate, so it shows up here as a diff. (The markers-file shape — no
-        # decide_marker emitted — is already pinned by project_single above.)
-        "snapshots/extra_marker.private.sccs.BUILD.bazel": "@project__extra_marker//private/sccs:BUILD.bazel",
+        # The ci group activates the project's build extra. Its dependency on
+        # colorama must be unconditional after resolving extra == 'build'.
+        "snapshots/extra_marker.distribution.bzl": "@project__extra_marker__distribution_extra_marker//:defs.bzl",
 
         # @pypi_dedup (dedup-installs: three lock universes over a shared set of
         # pure-bdist packages, with varying deps and exclude_glob overrides).

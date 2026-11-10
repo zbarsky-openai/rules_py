@@ -28,3 +28,11 @@ uv.project(
     pyproject = "//uv-requirements-bzl/group_b:pyproject.toml",
 )
 use_repo(uv, "pypi_requirements_by_dep_group", "pypi_requirements_bzl")
+
+# A group with zero member packages still exposes its dependency module.
+empty_hub = use_repo_rule("@aspect_rules_py//uv/private/uv_hub:repository.bzl", "uv_hub")
+
+empty_hub(
+    name = "pypi_empty_group_fixture",
+    configurations = {"empty": "//uv-requirements-bzl:BUILD.bazel"},
+)

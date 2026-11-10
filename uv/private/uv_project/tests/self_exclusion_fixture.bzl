@@ -4,8 +4,7 @@
 # buildifier: disable=bzl-visibility
 load("//py/private/interpreter:resolve.bzl", "resolve_host_interpreter_label")
 load("//uv/private/sdist_build:repository.bzl", "sdist_build")
-load("//uv/private/sdist_configure:defs.bzl", "DEFAULT_CONFIGURE_SCRIPT")
-load("//uv/private/uv_project:repository.bzl", "uv_project")
+load("//uv/private/uv_project:repository.bzl", "declare_project")
 
 def _source_impl(repository_ctx):
     repository_ctx.watch(repository_ctx.attr.interpreter)
@@ -55,9 +54,16 @@ _source = repository_rule(
 def _graph_layout_impl(repository_ctx):
     # Inspect repository output before analysis so the private BUILD files
     # need not be exported just for this test.
-    for label, expected_packages, expected_sccs in [
-        (repository_ctx.attr.project_build, ["a", "b", "c", "unused"], ["a", "b", "c", "unused"]),
-        (repository_ctx.attr.source_build, ["b"], ["a", "b", "c"]),
+    all_names = ["a", "b", "c", "unused"]
+    for label, files in [
+        (repository_ctx.attr.project_build, [
+            ("packages.bzl", all_names),
+            ("components.bzl", all_names),
+        ]),
+        (repository_ctx.attr.source_build, [
+            ("private/build_deps/BUILD.bazel", ["b"]),
+            ("private/build_deps/sccs/BUILD.bazel", ["a", "b", "c"]),
+        ]),
     ]:
         root = repository_ctx.path(label).dirname
         build_deps = root.get_child("private/build_deps")
@@ -69,15 +75,13 @@ def _graph_layout_impl(repository_ctx):
             repository_ctx.watch(path)
             if path.exists:
                 fail("Unexpected per-consumer graph output in " + str(path))
-        for path, expected in [
-            (build_deps.get_child("BUILD.bazel"), expected_packages),
-            (build_deps.get_child("sccs/BUILD.bazel"), expected_sccs),
-        ]:
+        for filename, expected in files:
+            path = root.get_child(filename)
             repository_ctx.watch(path)
-            content = repository_ctx.read(path)
+            content = "\n".join([line.lstrip() for line in repository_ctx.read(path).splitlines()])
             names = sorted([
                 declaration.split('"')[1]
-                for declaration in content.split("py_library(\n    name = ")[1:]
+                for declaration in content.split("py_library(\nname = ")[1:]
             ])
             if names != expected:
                 fail("Expected libraries {} in {}, got {}".format(expected, path, names))
@@ -107,18 +111,13 @@ def _self_exclusion_fixture_impl(module_ctx):
         ],
     )
     installs = {
-        "a": str(Label(":self_exclusion_a_install")),
-        "b": str(Label(":self_exclusion_b_install")),
-        "c": str(Label(":self_exclusion_c_install")),
-        "unused": str(Label(":self_exclusion_unused_install")),
+        name: str(Label(":self_exclusion_" + name + "_install"))
+        for name in ["a", "b", "c", "unused"]
     }
-    uv_project(
+    declare_project(
         name = "uv_project_self_exclusion_test",
-        available_deps_json = json.encode({
-            name: "@uv_project_self_exclusion_test//private/build_deps:" + name
-            for name in installs
-        }),
-        build_deps_json = json.encode({
+        build_component_owners = {name: name for name in installs},
+        build_deps = {
             "packages": {
                 name: [{
                     "deps": [install, "//private/build_deps/sccs:" + name],
@@ -142,27 +141,25 @@ def _self_exclusion_fixture_impl(module_ctx):
                     "//private/build_deps/sccs:a": {"": 1},
                 },
             },
-        }),
-        dep_to_scc = "{}",
-        scc_deps = "{}",
-        scc_graph = "{}",
+        },
+        dep_to_scc = {},
+        scc_deps = {},
+        scc_graph = {},
     )
     sdist_build(
         name = "uv_project_self_exclusion_sdist",
         src = "@uv_project_self_exclusion_source//:source.tar.gz",
-        available_deps_file = "@uv_project_self_exclusion_test//:available_deps.json",
-        build_deps_file = "@uv_project_self_exclusion_test//:build_deps.json",
-        configure_command = [
-            "$(location {})".format(interpreter),
-            "$(location {})".format(DEFAULT_CONFIGURE_SCRIPT),
-        ],
+        available_deps_file = "@uv_project_self_exclusion_test__build_graph//:available_deps.json",
+        build_deps_file = "@uv_project_self_exclusion_test__build_graph//:build_deps.json",
+        configure_interpreter = interpreter,
+        dependency_records = "@uv_project_self_exclusion_test__build_graph//:BUILD.bazel",
         deps = [Label("@pypi//build")],
         package_install = installs["a"],
         version = "0.0.1",
     )
     _graph_layout(
         name = "uv_project_self_exclusion_layout",
-        project_build = "@uv_project_self_exclusion_test//:BUILD.bazel",
+        project_build = "@uv_project_self_exclusion_test__build_graph//:BUILD.bazel",
         source_build = "@uv_project_self_exclusion_sdist//:BUILD.bazel",
     )
     return module_ctx.extension_metadata(reproducible = True)

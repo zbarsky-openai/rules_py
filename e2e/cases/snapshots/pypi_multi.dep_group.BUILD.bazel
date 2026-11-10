@@ -42,6 +42,6 @@ config_setting(
 
 
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel"] + glob(["deps/*.bzl"], allow_empty = True),
     visibility = ["//visibility:public"],
 )

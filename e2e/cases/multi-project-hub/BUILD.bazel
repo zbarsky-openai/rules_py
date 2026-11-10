@@ -30,6 +30,16 @@ py_test(
 )
 
 py_test(
+    name = "beta_only",
+    srcs = ["__test__.py"],
+    dep_group = "beta",
+    main = "__test__.py",
+    python_version = "3.11",
+    # Both hubs use beta's cowsay. This hub has no alpha or gamma groups.
+    deps = ["@pypi_beta_only//cowsay"],
+)
+
+py_test(
     name = "beta",
     srcs = ["__test__.py"],
     dep_group = "beta",

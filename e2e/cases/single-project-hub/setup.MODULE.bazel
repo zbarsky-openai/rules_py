@@ -10,4 +10,10 @@ uv.project(
     lock = "//single-project-hub:uv.lock",
     pyproject = "//single-project-hub:pyproject.toml",
 )
-use_repo(uv, "project__single_project_hub", "pypi_single")
+use_repo(
+    uv,
+    "project__single_project_hub",
+    "project__single_project_hub__distribution_cowsay",
+    "project__single_project_hub__marker_0",
+    "pypi_single",
+)

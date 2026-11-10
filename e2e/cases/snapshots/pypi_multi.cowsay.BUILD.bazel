@@ -1,4 +1,4 @@
-load("//:defs.bzl", "compatible_with")
+load("//:compatibility.bzl", "compatible_with")
 
 
 alias(
@@ -9,10 +9,10 @@ alias(
 alias(
     name = "whl",
     actual = select({
-          "//dep_group:beta": "@project__beta//:cowsay_whl",
-          "//dep_group:dev": "@project__alpha//:cowsay_whl",
-          "//dep_group:gamma": "@project__gamma//:cowsay_whl",
-          "//dep_group:unit-tests": "@project__alpha//:cowsay_whl",
+          "//dep_group:beta": "@@aspect_rules_py++uv+project__beta//private/distributions/cowsay:cowsay_whl",
+          "//dep_group:dev": "@@aspect_rules_py++uv+project__alpha//private/distributions/cowsay:cowsay_whl",
+          "//dep_group:gamma": "@@aspect_rules_py++uv+project__gamma//private/distributions/cowsay:cowsay_whl",
+          "//dep_group:unit-tests": "@@aspect_rules_py++uv+project__alpha//private/distributions/cowsay:cowsay_whl",
       }),
     target_compatible_with = select(compatible_with(["beta", "dev", "gamma", "unit-tests"])),
     visibility = ["//visibility:public"],
@@ -20,10 +20,10 @@ alias(
 alias(
     name = "cowsay",
     actual = select({
-          "//dep_group:beta": "@project__beta//:cowsay",
-          "//dep_group:dev": "@project__alpha//:cowsay",
-          "//dep_group:gamma": "@project__gamma//:cowsay",
-          "//dep_group:unit-tests": "@project__alpha//:cowsay",
+          "//dep_group:beta": "@@aspect_rules_py++uv+project__beta//private/distributions/cowsay:cowsay",
+          "//dep_group:dev": "@@aspect_rules_py++uv+project__alpha//private/distributions/cowsay:cowsay",
+          "//dep_group:gamma": "@@aspect_rules_py++uv+project__gamma//private/distributions/cowsay:cowsay",
+          "//dep_group:unit-tests": "@@aspect_rules_py++uv+project__alpha//private/distributions/cowsay:cowsay",
       },
         no_match_error = "Available only in dep_groups: beta, dev, gamma, unit-tests",
     ),

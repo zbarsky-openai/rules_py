@@ -5,4 +5,9 @@ uv.project(
     lock = "//uv-extra-marker:uv.lock",
     pyproject = "//uv-extra-marker:pyproject.toml",
 )
-use_repo(uv, "project__extra_marker", "pypi_uv_extra_marker")
+use_repo(
+    uv,
+    "project__extra_marker",
+    "project__extra_marker__distribution_extra_marker",
+    "pypi_uv_extra_marker",
+)

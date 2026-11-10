@@ -12,6 +12,12 @@ A unique hub name keeps the snapshot stable across both modes.
 """
 
 uv = use_extension("@aspect_rules_py//uv:extensions.bzl", "uv")
+uv.declare_hub(hub_name = "pypi_beta_only")
+uv.project(
+    hub_name = "pypi_beta_only",
+    lock = "//multi-project-hub/beta:uv.lock",
+    pyproject = "//multi-project-hub/beta:pyproject.toml",
+)
 uv.declare_hub(hub_name = "pypi_multi")
 uv.project(
     hub_name = "pypi_multi",
@@ -28,4 +34,4 @@ uv.project(
     lock = "//multi-project-hub/gamma:uv.lock",
     pyproject = "//multi-project-hub/gamma:pyproject.toml",
 )
-use_repo(uv, "pypi_multi")
+use_repo(uv, "pypi_beta_only", "pypi_multi")

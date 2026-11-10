@@ -1,108 +1,100 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//uv/private/uv_project:select_gen.bzl", "build_package_select_arms")
+load("//uv/private/uv_project:repository.bzl", "partition_project")
+load("//uv/private/uv_project:select_gen.bzl", "build_package_select_arms", "marker_interner")
 
-def _ml(expr):
+def _marker_label(expr):
     return "//private/markers:" + expr
 
-def _simple_inactive_marker_test_impl(ctx):
-    """Simple marker: inactive on non-Windows hosts falls back to empty."""
+def _inactive_markers_test_impl(ctx):
     env = unittest.begin(ctx)
-    cfg_arms, whl_cfg_arms = build_package_select_arms(
-        scc_cfgs = {"scc_ini": {"sys_platform == 'win32'": 1}},
-        scc_graph = {},
-        package = "iniconfig",
-        marker_fn = _ml,
-    )
-    asserts.equals(env, 2, len(cfg_arms), "want marker arm + default fallback")
-    asserts.true(env, "//conditions:default" in cfg_arms)
-    asserts.equals(env, "//private/sccs:empty", cfg_arms["//conditions:default"])
-    asserts.true(env, "//conditions:default" in whl_cfg_arms)
-    asserts.equals(env, ":empty_whl", whl_cfg_arms["//conditions:default"])
+    for expr in [
+        "sys_platform == 'win32'",
+        "sys_platform == 'win32' and python_full_version >= '3.12'",
+        "sys_platform == 'win32' or python_full_version >= '3.12'",
+    ]:
+        cfg, whl = build_package_select_arms(
+            scc_cfgs = {"scc_ini": {expr: 1}},
+            installs_by_scc = {},
+            package = "iniconfig",
+            marker_fn = _marker_label,
+            scc_owners = {"scc_ini": "iniconfig"},
+        )
+        asserts.equals(env, {
+            _marker_label(expr): "//private/distributions/iniconfig:_scc__scc_ini",
+            "//conditions:default": "//private/sccs:empty",
+        }, cfg, expr)
+        asserts.equals(env, {"//conditions:default": "//private/sccs:empty_whl"}, whl, expr)
     return unittest.end(env)
 
-simple_inactive_marker_test = unittest.make(_simple_inactive_marker_test_impl)
-
-def _compound_and_inactive_marker_test_impl(ctx):
-    """Compound AND marker: inactive when any branch is false."""
-    env = unittest.begin(ctx)
-    cfg_arms, whl_cfg_arms = build_package_select_arms(
-        scc_cfgs = {"scc_six": {"sys_platform == 'win32' and python_full_version >= '3.12'": 1}},
-        scc_graph = {},
-        package = "six",
-        marker_fn = _ml,
-    )
-    asserts.equals(env, 2, len(cfg_arms))
-    asserts.true(env, "//conditions:default" in cfg_arms)
-    asserts.equals(env, "//private/sccs:empty", cfg_arms["//conditions:default"])
-    asserts.equals(env, ":empty_whl", whl_cfg_arms["//conditions:default"])
-    return unittest.end(env)
-
-compound_and_inactive_marker_test = unittest.make(_compound_and_inactive_marker_test_impl)
-
-def _compound_or_marker_test_impl(ctx):
-    """Compound OR marker: partially matching expression still needs a default arm."""
-    env = unittest.begin(ctx)
-    cfg_arms, whl_cfg_arms = build_package_select_arms(
-        scc_cfgs = {"scc_pkg": {"sys_platform == 'win32' or python_full_version >= '3.12'": 1}},
-        scc_graph = {},
-        package = "packaging",
-        marker_fn = _ml,
-    )
-    asserts.equals(env, 2, len(cfg_arms), "want OR-marker arm + default fallback")
-    asserts.true(
-        env,
-        "//conditions:default" in cfg_arms,
-        "OR marker must have a default arm for the case where no branch matches",
-    )
-    asserts.equals(env, "//private/sccs:empty", cfg_arms["//conditions:default"])
-    asserts.equals(env, ":empty_whl", whl_cfg_arms["//conditions:default"])
-    return unittest.end(env)
-
-compound_or_marker_test = unittest.make(_compound_or_marker_test_impl)
+_inactive_markers_test = unittest.make(_inactive_markers_test_impl)
 
 def _active_package_test_impl(ctx):
-    """Unconditional package: only the default arm is emitted."""
     env = unittest.begin(ctx)
-    cfg_arms, whl_cfg_arms = build_package_select_arms(
-        scc_cfgs = {"scc_tqdm": {"": 1}},
-        scc_graph = {},
-        package = "tqdm",
-        marker_fn = _ml,
-    )
-    asserts.equals(env, 1, len(cfg_arms), "active package needs only the unconditional arm")
-    asserts.equals(env, "//private/sccs:scc_tqdm", cfg_arms["//conditions:default"])
+
+    # override_repo can point an install at a repository with a different name.
+    for installs, expected_whl in [
+        ({}, "//private/sccs:empty_whl"),
+        ({"scc_tqdm": "@@+local_repos+fixture//:install"}, "@@+local_repos+fixture//:whl"),
+    ]:
+        cfg, whl = build_package_select_arms(
+            scc_cfgs = {"scc_tqdm": {"": 1}},
+            installs_by_scc = installs,
+            package = "tqdm",
+            marker_fn = _marker_label,
+            scc_owners = {"scc_tqdm": "tqdm"},
+        )
+        asserts.equals(env, {"//conditions:default": "//private/distributions/tqdm:_scc__scc_tqdm"}, cfg)
+        asserts.equals(env, {"//conditions:default": expected_whl}, whl)
     return unittest.end(env)
 
-active_package_test = unittest.make(_active_package_test_impl)
+_active_package_test = unittest.make(_active_package_test_impl)
 
-def _active_package_whl_arm_test_impl(ctx):
-    """Active package with a wheel install resolves the wheel label."""
+def _shared_cycle_wheels_test_impl(ctx):
     env = unittest.begin(ctx)
-    cfg_arms, whl_cfg_arms = build_package_select_arms(
-        scc_cfgs = {"scc_tqdm": {"": 1}},
-        scc_graph = {
-            "scc_tqdm": {
-                "@whl_install__hub__tqdm__4_68_3//:install": {"": 1},
-            },
-        },
-        package = "tqdm",
-        marker_fn = _ml,
+
+    # Dedup moved aaa's install to project foo. Both install labels contain "foo".
+    aaa = "@whl_install__foo__aaa__1//:install"
+    foo = "@whl_install__tools__foo__1//:install"
+    active = {"": 1}
+    cfg = {"tools": {"cycle": active}}
+    parts = partition_project(
+        dep_to_scc = {"aaa": cfg, "foo": cfg, "native": cfg},
+        scc_graph = {"cycle": [(aaa, "aaa", active), (foo, "foo", active), ("//:native", None, active)]},
+        scc_deps = {},
+        testonly_packages = {},
+        build_deps = None,
+        build_component_owners = {},
     )
-    asserts.equals(
-        env,
-        "@whl_install__hub__tqdm__4_68_3//:whl",
-        whl_cfg_arms["//conditions:default"],
-    )
+    asserts.equals(env, {"cycle": aaa}, parts.distributions["aaa"]["installs"])
+    asserts.equals(env, {"cycle": foo}, parts.distributions["foo"]["installs"])
+    asserts.equals(env, {}, parts.distributions["native"]["installs"])
     return unittest.end(env)
 
-active_package_whl_arm_test = unittest.make(_active_package_whl_arm_test_impl)
+_shared_cycle_wheels_test = unittest.make(_shared_cycle_wheels_test_impl)
+
+def _stable_marker_keys_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # These PEP 508 expressions deliberately share Starlark's string hash.
+    a = "os_name == 'Aa'"
+    b = "os_name == 'BB'"
+    asserts.equals(env, hash(a), hash(b))
+    forward = marker_interner({})
+    a_first = forward(a)
+    b_second = forward(b)
+    asserts.false(env, a_first == b_second)
+    reverse = marker_interner({})
+    asserts.equals(env, b_second, reverse(b))
+    asserts.equals(env, a_first, reverse(a))
+    return unittest.end(env)
+
+_stable_marker_keys_test = unittest.make(_stable_marker_keys_test_impl)
 
 def select_gen_test_suite():
     unittest.suite(
         "select_gen_tests",
-        simple_inactive_marker_test,
-        compound_and_inactive_marker_test,
-        compound_or_marker_test,
-        active_package_test,
-        active_package_whl_arm_test,
+        _stable_marker_keys_test,
+        _inactive_markers_test,
+        _active_package_test,
+        _shared_cycle_wheels_test,
     )

@@ -1,0 +1,5 @@
+load("@@+uv+project__aspect_rules_py__surface//:defs.bzl", "define")
+
+define()
+alias(name = "available_deps.json", actual = "@@+uv+project__aspect_rules_py__build_graph//:available_deps.json", visibility = ["//visibility:public"])
+alias(name = "build_deps.json", actual = "@@+uv+project__aspect_rules_py__build_graph//:build_deps.json", visibility = ["//visibility:public"])
