@@ -1,5 +1,6 @@
 load("//uv/private:normalize_version.bzl", "normalize_version")
 load("//uv/private/graph:sccs.bzl", "sccs")
+load(":marker_simplify.bzl", "add_minimal_clause", "clause_marker")
 
 def _derive_scc_id(scc_members, stems):
     """Derive a deterministic, readable SCC id from the SCC's members.
@@ -27,7 +28,7 @@ def collect_sccs(marker_graph, id_state = None):
     are groups of packages that have cyclic dependencies on each other.
 
     Args:
-        marker_graph: The dependency marker_graph, as returned by `build_marker_graph`.
+        marker_graph: The dependency graph, as returned by `normalize_lock`.
         {pkg: {dep: {marker: 1}}}. Dependencies may be lock tuples or absolute
         Bazel-label strings; labels remain external to the SCC topology.
         id_state: dict carrying SCC id intern state. Pass the same dict for
@@ -46,70 +47,53 @@ def collect_sccs(marker_graph, id_state = None):
           dependencies.
     """
 
-    all_nodes = set()
-    for pkg, deps in marker_graph.items():
-        all_nodes.add(pkg)
-        for dep in deps.keys():
-            if type(dep) != "string":
-                all_nodes.add(dep)
+    graph = {}
+    for member, deps in marker_graph.items():
+        neighbors = [dep for dep in deps if type(dep) != "string"]
+        graph[member] = neighbors
+        for dep in neighbors:
+            graph.setdefault(dep, ())
 
-    simplified_graph = {node: [] for node in all_nodes}
-    for pkg, deps in marker_graph.items():
-        simplified_graph[pkg] = [dep for dep in deps if type(dep) != "string"]
-
-    graph_components = sccs(simplified_graph)
-
-    # Split each SCC's edges into external deps and intra-member deps in
-    # one pass, merging markers per target.
-    scc_info_list = []
-    for scc_members in graph_components:
-        member_set = {m: True for m in scc_members}
-        raw_scc_deps = {}
-        intra_deps = {}
-        for member in scc_members:
-            for dep, markers in marker_graph.get(member, {}).items():
-                target = intra_deps if dep in member_set else raw_scc_deps
-                target.setdefault(dep, {}).update(markers)
-        scc_info_list.append((scc_members, raw_scc_deps, intra_deps))
-
-    new_scc_graph = {}
     dep_to_scc = {}
-    final_scc_deps = {}  # This will store the scc_deps with the new keys
+    scc_graph = {}
+    scc_deps = {}
+    interned_ids = id_state.setdefault("ids", {}) if id_state != None else None
+    stems = id_state.setdefault("stems", {}) if id_state != None else {}
+    for members in sccs(graph):
+        internal = {member: {} for member in members}
+        external = {}
+        for member in members:
+            for dep, markers in marker_graph.get(member, {}).items():
+                if dep in internal:
+                    internal[dep].update(markers)
+                elif dep in external:
+                    external[dep].update(markers)
+                else:
+                    external[dep] = dict(markers)
 
-    if id_state == None:
-        id_state = {}
-    interned_ids = id_state.setdefault("ids", {})
-    id_stems = id_state.setdefault("stems", {})
+        if interned_ids == None:
+            component = _derive_scc_id(members, stems)
+        else:
+            # Label strings and four-field lock tuples may coexist in one SCC.
+            # Give each edge a tuple key so sorting uses a single type.
+            edges = tuple(sorted([
+                ((dep,) if type(dep) == "string" else dep, tuple(markers.items()))
+                for dep, markers in external.items()
+            ]))
+            content = (tuple(members), edges)
+            component = interned_ids.get(content)
+            if component == None:
+                component = _derive_scc_id(members, stems)
+                interned_ids[content] = component
 
-    for scc_members, raw_scc_deps, intra_deps in scc_info_list:
-        # Intern the scc_id by full content: distinct (members, deps, markers)
-        # content must map to distinct ids, identical content to one id.
-        content_key = repr(sorted(scc_members)) + ";" + repr(sorted(raw_scc_deps.items(), key = str))
-        new_scc_id = interned_ids.get(content_key)
-        if new_scc_id == None:
-            new_scc_id = _derive_scc_id(scc_members, id_stems)
-            interned_ids[content_key] = new_scc_id
+        for member, markers in internal.items():
+            dep_to_scc[member] = component
+            if not markers:
+                markers[""] = 1
+        scc_graph[component] = internal
+        scc_deps[component] = external
 
-        # Build the new scc_graph entry
-        new_scc_graph[new_scc_id] = {m: {} for m in scc_members}
-
-        # Populate dep_to_scc
-        for member in scc_members:
-            dep_to_scc[member] = new_scc_id
-
-        # Populate final_scc_deps
-        final_scc_deps[new_scc_id] = raw_scc_deps
-
-        # Merge the intra-member markers collected in the split above.
-        for next, next_marks in intra_deps.items():
-            new_scc_graph[new_scc_id][next].update(next_marks)
-
-        # Ensure that everything has at least the no-op marker
-        for next in scc_members:
-            if len(new_scc_graph[new_scc_id][next].keys()) == 0:
-                new_scc_graph[new_scc_id][next].update({"": 1})
-
-    return dep_to_scc, new_scc_graph, final_scc_deps
+    return dep_to_scc, scc_graph, scc_deps
 
 def collect_build_deps(marker_graph):
     """Collect build dependencies with conditions relative to each cycle entry.
@@ -125,24 +109,16 @@ def collect_build_deps(marker_graph):
     dep_to_entry, entry_graph, entry_deps = collect_sccs(marker_graph)
     used_ids = {scc_id: 1 for scc_id in entry_graph}
 
-    def _add_paths(paths, lefts, rights):
+    def _add_paths(paths, lefts, markers):
         # A path is a conjunction of whole marker expressions. Canonicalize
         # repeated conditions and absorb stronger paths to the same node.
         for left in lefts:
-            for right in rights:
-                path = tuple(sorted({marker: 1 for marker in left + right}))
-                if any([all([marker in path for marker in existing]) for existing in paths]):
-                    continue
-                for existing in list(paths):
-                    if all([marker in existing for marker in path]):
-                        paths.pop(existing)
-                paths[path] = 1
+            for marker in markers:
+                path = tuple(sorted(left + (marker,))) if marker and marker not in left else left
+                add_minimal_clause(paths, path)
 
     def _markers(paths):
-        return {
-            path[0] if len(path) == 1 else " and ".join(["({})".format(marker) for marker in path]): 1
-            for path in paths
-        }
+        return {clause_marker(path): 1 for path in paths}
 
     for scc_id, members in list(entry_graph.items()):
         if all([
@@ -174,11 +150,7 @@ def collect_build_deps(marker_graph):
                 for member, paths in reachable.items():
                     for dep, markers in marker_graph.get(member, {}).items():
                         if dep in members:
-                            _add_paths(
-                                next_reachable.setdefault(dep, {}),
-                                paths,
-                                [(marker,) if marker else () for marker in markers],
-                            )
+                            _add_paths(next_reachable.setdefault(dep, {}), paths, markers)
                 if next_reachable == reachable:
                     break
                 reachable = next_reachable
@@ -187,11 +159,7 @@ def collect_build_deps(marker_graph):
             for member, paths in reachable.items():
                 for dep, markers in marker_graph.get(member, {}).items():
                     if dep not in members:
-                        _add_paths(
-                            deps.setdefault(dep, {}),
-                            paths,
-                            [(marker,) if marker else () for marker in markers],
-                        )
+                        _add_paths(deps.setdefault(dep, {}), paths, markers)
             entry_graph[entry_id] = {member: _markers(paths) for member, paths in reachable.items()}
             entry_deps[entry_id] = {dep: _markers(paths) for dep, paths in deps.items()}
 
@@ -281,6 +249,11 @@ def reachable_build_deps(packages, scc_graph):
         frontier = next_frontier
     return reachable
 
+def _base_package(package):
+    if package[3] == "__base__":
+        return package
+    return (package[0], package[1], package[2], "__base__")
+
 def replace_dependencies(marker_graph, replacements):
     """Replace named locked edges with absolute labels, retaining their markers.
 
@@ -289,78 +262,66 @@ def replace_dependencies(marker_graph, replacements):
     """
     if not replacements:
         return marker_graph
-    result = {}
+    result = dict(marker_graph)
     for package, deps in marker_graph.items():
-        targets = replacements.get(package[:3] + ("__base__",), {})
+        targets = replacements.get(_base_package(package))
+        if not targets:
+            continue
         replaced = {}
         for dep, markers in deps.items():
             replaced.setdefault(targets.get(dep[1], dep), {}).update(markers)
         result[package] = replaced
     return result
 
-def combine_markers(lefts, rights):
-    """
-    Combine two sets of markers under _and_.
+def _base_edges(edges):
+    for dep in edges:
+        if dep[3] != "__base__":
+            normalized = {}
+            for target, markers in edges.items():
+                normalized.setdefault(_base_package(target), {}).update(markers)
+            return normalized
+    return edges
 
-    If `a[b]; m` implies some `b; n`, then `a` implies `b` IFF `m and n`. It
-    would be incorrect to disregard either the left or right markers, as either
-    case of doing so could lead to an unsatisfiable false dependency.
-    """
-
-    acc = {}
-
-    def _and(l, r):
-        """
-        We use "" as the empty/True marker, so if either side is true then we
-        need to return the other side.
-        """
-
-        if l == "":
-            return r
-        elif r == "":
-            return l
-        else:
-            return "({}) and ({})".format(l, r)
-
-    for l in lefts.keys():
-        for r in rights.keys():
-            acc[_and(l, r)] = 1
-
-    return acc
-
-def activate_extras(marker_graph, activated_extras, cfg):
-    """
-    Configure an unconfigured marker graph by activating extras.
-
-    Produce a _new_ graph without modifying the original which:
-    - Merges all active extras into their base packages (add deps)
-    - Translates all deps on extras to deps on the base package
-    - Removes all extras pesudo-packages
-    """
-
-    acc = {}
-
-    for pkg, marked_deps in marker_graph.items():
-        # Ignore extra pseudo-packages
-        if pkg[3] != "__base__":
+def group_activations(marker_graph, activated_extras, configurations):
+    """Normalize base edges and group configurations by their ordered extra activations."""
+    base = {}
+    activations = {cfg: [] for cfg in configurations}
+    for package, edges in marker_graph.items():
+        if package[3] != "__base__":
             continue
+        base[package] = _base_edges(edges)
 
-        # Packages may have no deps so we have to create this here
-        acc.setdefault(pkg, {})
+        for cfg, extras in activated_extras.get(package, {}).items():
+            if cfg not in activations:
+                continue
+            for extra, markers in extras.items():
+                if not marker_graph.get(extra):
+                    continue
+                if extra == package and len(markers) == 1 and "" in markers:
+                    # These unconditional edges are already in base.
+                    continue
 
-        for dep, markers in list(marked_deps.items()):
-            # Normalize all deps to deps on the base package
-            normalized_dep = (dep[0], dep[1], dep[2], "__base__")
-            acc[pkg].setdefault(normalized_dep, {}).update(markers)
+                # Order matters when several extras contribute markers to the same edge.
+                activations[cfg].append((package, extra, tuple(markers)))
 
-        # For the current (base!) package, look up the closure of activated
-        # extras and merge the _dependencies_ of those extras in.
-        extras = activated_extras.get(pkg, {}).get(cfg, {})
-        for extra, extra_markers in extras.items():
-            # Merge in deps from the requested extra
-            for implied_dep, implied_markers in marker_graph.get(extra, {}).items():
-                # Normalize since the source graph isn't
-                normalized_implied_dep = (implied_dep[0], implied_dep[1], implied_dep[2], "__base__")
-                acc[pkg].setdefault(normalized_implied_dep, {}).update(combine_markers(extra_markers, implied_markers))
+    groups = {}
+    for cfg, extras in activations.items():
+        groups.setdefault(tuple(extras), []).append(cfg)
+    return base, {cfgs[0]: (extras, cfgs) for extras, cfgs in groups.items()}
 
-    return acc
+def activate_extras(base, marker_graph, activations):
+    """Overlay one group's active extra edges on the shared base graph."""
+    if not activations:
+        return base
+    changed = {}
+    for package, extra, markers in activations:
+        if package not in changed:
+            changed[package] = {dep: dict(conditions) for dep, conditions in base[package].items()}
+        deps = changed[package]
+        for dep, implied in marker_graph[extra].items():
+            conditions = deps.setdefault(_base_package(dep), {})
+            for left in markers:
+                for right in implied:
+                    marker = "({}) and ({})".format(left, right) if left and right else left or right
+                    conditions[marker] = 1
+    return base | changed

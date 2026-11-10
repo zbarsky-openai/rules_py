@@ -1,5 +1,59 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//uv/private/extension:graph_utils.bzl", "activate_extras", "collect_build_deps", "collect_sccs", "exclude_build_dep", "reachable_build_deps", "replace_dependencies")
+load("//uv/private/extension:graph_utils.bzl", "activate_extras", "collect_build_deps", "collect_sccs", "exclude_build_dep", "group_activations", "reachable_build_deps", "replace_dependencies")
+
+def _effective_graph(graph, active, cfg):
+    base, groups = group_activations(graph, active, [cfg])
+    extras, _ = groups[cfg]
+    return activate_extras(base, graph, extras)
+
+def _activation_groups_test_impl(ctx):
+    env = unittest.begin(ctx)
+    a = ("lock", "a", "1", "__base__")
+    b = ("lock", "b", "1", "__base__")
+    c = ("lock", "c", "1", "__base__")
+    loop = ("lock", "b", "1", "loop")
+    leaf = ("lock", "a", "1", "leaf")
+    extra = ("lock", "a", "1", "extra")
+    always = {"": 1}
+    graph = {a: {b: always}, b: {}, c: {}, loop: {a: always}, leaf: {}, extra: {c: always}}
+    groups = ["plain", "loop", "conditional", "base_and_leaf", "ordered", "other_order", "loop_again"]
+    active = {
+        a: {
+            "base_and_leaf": {a: always, leaf: {"platform": 1}},
+            "ordered": {extra: {"linux": 1, "mac": 1}},
+            "other_order": {extra: {"mac": 1, "linux": 1}},
+        },
+        b: {
+            "loop": {loop: always},
+            "conditional": {loop: {"platform": 1}},
+            "loop_again": {loop: always},
+        },
+    }
+
+    _, plans = group_activations(graph, active, groups)
+    equivalents = {first: cfgs for first, (_, cfgs) in plans.items()}
+    asserts.equals(env, {
+        "plain": ["plain", "base_and_leaf"],
+        "loop": ["loop", "loop_again"],
+        "conditional": ["conditional"],
+        "ordered": ["ordered"],
+        "other_order": ["other_order"],
+    }, equivalents)
+
+    # Every equivalent graph must produce the same member IDs, markers and deps.
+    state = {}
+    results = {}
+    for group in groups:
+        edges = _effective_graph(graph, active, group)
+        results[group] = collect_sccs(replace_dependencies(edges, {a: {"c": "@external//:override"}}), state)
+    for first, configs in equivalents.items():
+        for cfg in configs:
+            asserts.equals(env, results[first], results[cfg])
+    asserts.true(env, results["loop"][0][a] == results["loop"][0][b])
+    asserts.true(env, results["plain"][0][a] != results["plain"][0][b])
+    return unittest.end(env)
+
+activation_groups_test = unittest.make(_activation_groups_test_impl)
 
 def _extras_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -37,7 +91,7 @@ def _extras_test_impl(ctx):
         },
         ("proj", "1.0", "pkg3", "__base__"): {},
     }
-    result_graph_1 = activate_extras(marker_graph_1, activated_extras_1, cfg)
+    result_graph_1 = _effective_graph(marker_graph_1, activated_extras_1, cfg)
     asserts.equals(env, expected_graph_1, result_graph_1, "Test Case 1 Failed: Simple extra activation")
 
     # Test Case 2: No extras activated (dependency on extra exists, but extra not in activated_extras)
@@ -56,7 +110,7 @@ def _extras_test_impl(ctx):
             ("proj", "1.0", "pkg2", "__base__"): {"": 1},
         },
     }
-    result_graph_2 = activate_extras(marker_graph_2, activated_extras_2, cfg)
+    result_graph_2 = _effective_graph(marker_graph_2, activated_extras_2, cfg)
     asserts.equals(env, expected_graph_2, result_graph_2, "Test Case 2 Failed: No extras activated")
 
     # Test Case 3: Extra with multiple dependencies and conditional markers
@@ -93,7 +147,7 @@ def _extras_test_impl(ctx):
         ("proj", "1.0", "pkg3", "__base__"): {},
         ("proj", "1.0", "pkg4", "__base__"): {},
     }
-    result_graph_3 = activate_extras(marker_graph_3, activated_extras_3, cfg)
+    result_graph_3 = _effective_graph(marker_graph_3, activated_extras_3, cfg)
     asserts.equals(env, expected_graph_3, result_graph_3, "Test Case 3 Failed: Extra with multiple dependencies and conditional markers")
 
     return unittest.end(env)
@@ -237,8 +291,8 @@ def _collect_sccs_id_state_test_impl(ctx):
     extra = pkg[:3] + ("extra",)
     graph = {pkg: {}, extra: {dep_a: {"sys_platform == 'linux'": 1}}, dep_a: {}}
     activations = {pkg: {"with_extra": {extra: {"python_version >= '3.12'": 1}}}}
-    active = replace_dependencies(activate_extras(graph, activations, "with_extra"), {pkg: {"requests": replacement}})
-    inactive = replace_dependencies(activate_extras(graph, activations, "without_extra"), {pkg: {"requests": replacement}})
+    active = replace_dependencies(_effective_graph(graph, activations, "with_extra"), {pkg: {"requests": replacement}})
+    inactive = replace_dependencies(_effective_graph(graph, activations, "without_extra"), {pkg: {"requests": replacement}})
     asserts.equals(env, {"(python_version >= '3.12') and (sys_platform == 'linux')": 1}, active[pkg][replacement])
     asserts.equals(env, {}, inactive[pkg])
 
@@ -253,6 +307,26 @@ def _collect_sccs_id_state_test_impl(ctx):
 collect_sccs_id_state_test = unittest.make(
     _collect_sccs_id_state_test_impl,
 )
+
+def _collect_sccs_mixed_edges_test_impl(ctx):
+    env = unittest.begin(ctx)
+    package = ("lock", "app", "1", "__base__")
+    locked = ("lock", "lib", "1", "__base__")
+    replacement = "@@//fixture:replacement"
+    always = {"": 1}
+    linux = {"sys_platform == 'linux'": 1}
+    id_state = {}
+
+    def component_id(deps):
+        ids, _, _ = collect_sccs({package: deps}, id_state)
+        return ids[package]
+
+    original = component_id({locked: always, replacement: linux})
+    asserts.equals(env, original, component_id({replacement: linux, locked: always}))
+    asserts.true(env, original != component_id({replacement: always, locked: always}))
+    return unittest.end(env)
+
+collect_sccs_mixed_edges_test = unittest.make(_collect_sccs_mixed_edges_test_impl)
 
 def _collect_sccs_linear_graph_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -654,6 +728,7 @@ def graph_utils_test_suite():
     unittest.suite(
         "extras_activation_tests",
         extras_activation_test,
+        activation_groups_test,
     )
     unittest.suite(
         "collect_sccs_tests",
@@ -670,4 +745,5 @@ def graph_utils_test_suite():
         exclude_build_dep_conditional_extra_test,
         exclude_build_dep_install_identity_test,
         reachable_build_deps_test,
+        collect_sccs_mixed_edges_test,
     )

@@ -40,7 +40,7 @@ def _url_basename_test_impl(ctx):
     asserts.equals(
         env,
         "foo-1.0.0-py3-none-any.whl",
-        url_basename("https://mirror.example.com/foo-1.0.0-py3-none-any.whl?token=xyz#sha256=0123456789abcdef"),
+        url_basename("https://mirror.example.com/foo-1.0.0-py3-none-any.whl?token=abc/def#checksum=ghi/jkl"),
     )
 
     # No directory components after the host

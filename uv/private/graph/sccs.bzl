@@ -15,73 +15,55 @@ def sccs(graph):
         A list of lists, where each inner list represents an SCC.
         The components of each SCC are in lexically sorted order.
     """
-    nodes = list(graph.keys())
-    bound = len(nodes) * len(nodes)
-    if not bound:
-        bound = 1
+    parents = {node: [] for node in graph}
 
-    # First DFS traversal to determine finishing times (post-order traversal)
+    # Each vertex can be entered and finished once, plus one processed edge per neighbor.
+    bound = len(graph)
+    for node, neighbors in graph.items():
+        bound += len(neighbors)
+        for neighbor in neighbors:
+            parents[neighbor].append(node)
+
     order = []
-
-    # visited can be 0 (unvisited), 1 (visiting), or 2 (finished)
-    visited = {node: 0 for node in nodes}
-    for node in nodes:
-        if visited[node] == 0:
-            # Stack frames are [node, cursor] so neighbor scans resume
-            # where they left off, keeping the traversal O(V + E).
-            stack = [[node, 0]]
-            visited[node] = 1
-            for _ in range(bound):
-                if not stack:
-                    break
-
-                frame = stack[-1]
-                current_node = frame[0]
-                neighbors = graph.get(current_node, [])
-
-                # Find an unvisited neighbor, starting from the cursor
-                unvisited_neighbor = None
-                for i in range(frame[1], len(neighbors)):
-                    if visited[neighbors[i]] == 0:
-                        unvisited_neighbor = neighbors[i]
-                        frame[1] = i + 1
-                        break
-
-                if unvisited_neighbor:
-                    visited[unvisited_neighbor] = 1
-                    stack.append([unvisited_neighbor, 0])
-                else:
-                    # All neighbors visited, so we are done with this node
-                    stack.pop()
-                    visited[current_node] = 2
-                    order.append(current_node)
-
-    # Create the transpose graph (all edges reversed)
-    transpose_graph = {node: [] for node in nodes}
-    for node in nodes:
-        for neighbor in graph.get(node, []):
-            transpose_graph.setdefault(neighbor, []).append(node)
+    visited = {}
+    for root in graph:
+        if root in visited:
+            continue
+        visited[root] = True
+        stack = [(root, reversed(graph[root]))]
+        for _ in range(bound):
+            if not stack:
+                break
+            node, neighbors = stack[-1]
+            if neighbors:
+                neighbor = neighbors.pop()
+                if neighbor not in visited:
+                    visited[neighbor] = True
+                    stack.append((neighbor, reversed(graph[neighbor])))
+            else:
+                order.append(node)
+                stack.pop()
 
     # Second DFS traversal on the transpose graph
     sccs = []
-    visited = {node: False for node in nodes}
-    for i in range(len(order)):
-        start_node = order[len(order) - 1 - i]  # reversed order
-        if not visited[start_node]:
+
+    # The first pass marked every vertex. Consume those marks on the reverse walk.
+    for start_node in reversed(order):
+        if visited[start_node]:
+            visited[start_node] = False
             component = []
             stack = [start_node]
-            visited[start_node] = True
 
-            for _ in range(bound):
+            for _ in range(len(graph)):
                 if not stack:
                     break
 
                 current_node = stack.pop()
                 component.append(current_node)
 
-                for neighbor in transpose_graph.get(current_node, []):
-                    if not visited[neighbor]:
-                        visited[neighbor] = True
+                for neighbor in parents[current_node]:
+                    if visited[neighbor]:
+                        visited[neighbor] = False
                         stack.append(neighbor)
 
             sccs.append(sorted(component))

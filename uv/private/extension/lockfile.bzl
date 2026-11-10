@@ -46,7 +46,8 @@ def url_basename(url):
     Returns:
         the file name as a string, e.g. "foo-1.0.0-py3-none-any.whl".
     """
-    basename = url.split("/")[-1].split("?")[0].split("#")[0]
+    path = url.partition("?")[0].partition("#")[0]
+    basename = path[path.rfind("/") + 1:]
     if not basename:
         fail("Invalid distribution URL (no file name): " + url)
     return basename
@@ -61,145 +62,95 @@ def _dist_identifier(dist):
         return dist["hash"].split(":")[1][:16]
     return fnv1a_64(dist["url"])
 
-def normalize_deps(lock_id, lock_data):
-    """Normalizes dependency specifications in a lockfile.
+def _add_locked_edges(edges, deps, lock_id, default_versions, owner_extra = None):
+    for dep in deps:
+        raw_name = dep["name"]
+        if "version" in dep:
+            base = (lock_id, normalize_name(raw_name), dep["version"], "__base__")
+        else:
+            base = default_versions.get(raw_name) or default_versions[normalize_name(raw_name)]
+        marker = dep.get("marker", "")
+        if owner_extra != None:
+            if marker:
+                marker = simplify_extra_marker(marker, owner_extra)
+            if marker == None:
+                continue
 
-    This function performs two main normalization steps:
-    1.  It computes a "default version" for each package, which is used when a
-        dependency specification does not include a version. The default version
-        is only computed for packages that have a single version in the lockfile.
-    2.  It updates all dependency statements within the lockfile to be
-        version-disambiguated, using the default versions where necessary.
+        extras = dep.get("extra", ())
+        if "__base__" not in extras:
+            edges.setdefault(base, {})[marker] = 1
+        for extra in extras:
+            target = base if extra == "__base__" else (base[0], base[1], base[2], extra)
+            edges.setdefault(target, {})[marker] = 1
+
+def normalize_lock(lock_id, lock_data):
+    """Index locked versions and build the graph used to activate dependencies.
+
+    Normalizes package names and fills source archive URLs in the lock records.
+    Resolves dependency names and versions as edges are added. The original
+    dependency records are left available for consumers of the lock metadata.
 
     Args:
-        lock_id: A unique identifier for the lockfile.
-        lock_data: The parsed content of the `uv.lock` file.
+        lock_id: Project identifier used in dependency tuples.
+        lock_data: The parsed content of the uv lockfile.
 
     Returns:
-        A tuple containing:
-        - A dictionary mapping package names to their default version dependency
-          tuples `(lock_id, package_name, version, "__base__")`.
-        - The normalized `lock_data` dictionary.
+        The unambiguous default versions, all package versions, and the graph
+        from dependency tuples to their ordered edges and markers.
     """
-
+    packages = lock_data.get("package", [])
     package_versions = {}
-    for spec in lock_data.get("package", []):
-        # spec: RequirementSpec
-        spec["name"] = normalize_name(spec["name"])
+    for package in packages:
+        name = normalize_name(package["name"])
+        version = package["version"]
+        package["name"] = name
+        package_versions.setdefault(name, {})[version] = (lock_id, name, version, "__base__")
 
-        # Collect all the versions first
-        package_versions.setdefault(spec["name"], {})[spec["version"]] = 1
+        if "sdist" in package and "url" not in package["sdist"]:
+            package["sdist"]["url"] = package["source"]["url"]
 
     default_versions = {
-        requirement: (lock_id, requirement, list(versions.keys())[0], "__base__")
-        for requirement, versions in package_versions.items()
+        name: versions.values()[0]
+        for name, versions in package_versions.items()
         if len(versions) == 1
     }
 
-    def _fix_version(dep):
-        dep["name"] = normalize_name(dep["name"])
-        if not "version" in dep:
-            # Note that default versions is requirement => (lock_id, name, version, "__base__")
-            # So we need to extract the version component here
-            dep["version"] = default_versions.get(dep["name"])[2]
-
-    for spec in lock_data.get("package", []):
-        # Backfill the sdist URL if the source is a URL file
-        if "sdist" in spec and not "url" in spec["sdist"]:
-            spec["sdist"]["url"] = spec["source"]["url"]
-
-        for dep in spec.get("dependencies", []):
-            _fix_version(dep)
-
-        for extra_deps in spec.get("optional-dependencies", {}).values():
-            for dep in extra_deps:
-                _fix_version(dep)
-
-    return default_versions, package_versions, lock_data
-
-def build_marker_graph(lock_id, lock_data):
-    """Builds a dependency graph from a lockfile.
-
-    The graph is represented as a dictionary where the keys are `Dependency`
-    tuples `(lock_id, package, version, extra)` and the values are dictionaries
-    of their dependencies. The dependency dictionaries are keyed by `Dependency`
-    tuples and their values are dictionaries of markers.
-
-    This function also normalizes dependencies on extras. Dependencies without an
-    extra are converted to a dependency on the `__base__` extra. Each extra also
-    gets a synthetic dependency on the `__base__` package of the same version.
-
-    Args:
-        lock_id: A unique identifier for the lockfile.
-        lock_data: The parsed content of the `uv.lock` file.
-
-    Returns:
-        A dictionary representing the dependency graph.
-    """
-
     graph = {}
-    for spec in lock_data.get("package", []):
-        # spec: RequirementSpec
-        k = (lock_id, spec["name"], spec["version"], "__base__")
-        graph.setdefault(k, {})
-        for dep in spec.get("dependencies", []):
-            extras = dep.get("extra", ["__base__"])
-            if "__base__" not in extras:
-                extras = ["__base__"] + extras
+    for package in packages:
+        name = package["name"]
+        version = package["version"]
+        base = package_versions[name][version]
+        _add_locked_edges(graph.setdefault(base, {}), package.get("dependencies", ()), lock_id, default_versions)
+        for extra, deps in package.get("optional-dependencies", {}).items():
+            target = (lock_id, name, version, extra)
+            _add_locked_edges(graph.setdefault(target, {}), deps, lock_id, default_versions, owner_extra = extra)
 
-            for e in extras:
-                ek = (lock_id, dep["name"], dep["version"], e)
-                graph[k].setdefault(ek, {})
-                graph[k][ek][dep.get("marker", "")] = 1
+    return default_versions, package_versions, graph
 
-        for extra_name, optional_deps in spec.get("optional-dependencies", {}).items():
-            ek = (lock_id, spec["name"], spec["version"], extra_name)
-
-            graph.setdefault(ek, {})
-            for dep in optional_deps:
-                marker = simplify_extra_marker(dep.get("marker", ""), extra_name)
-                if marker == None:
-                    continue
-
-                extras = dep.get("extra", ["__base__"])
-                if "__base__" not in extras:
-                    extras = ["__base__"] + extras
-
-                for e in extras:
-                    eek = (lock_id, dep["name"], dep["version"], e)
-                    graph[ek].setdefault(eek, {})
-                    graph[ek][eek][marker] = 1
-
-    return graph
-
-def collect_configurations(lock):
-    """Collects all unique platform configurations from the wheels in a lockfile.
+def collect_configurations(wheel_files):
+    """Collects the platform configurations needed by the locked wheels.
 
     This function identifies all the unique combinations of Python implementation,
     platform, and ABI from the wheel filenames in the lockfile.
 
     Args:
-        lock: The parsed content of the `uv.lock` file.
+        wheel_files: The ordered set of wheel filenames across all locks.
 
     Returns:
         A dictionary mapping configuration strings (e.g.,
         "cp39-manylinux_2_17_x86_64-cp39") to a list of `config_setting`
         labels that define the configuration.
     """
-    wheel_files = {}
-
-    for package in lock.get("package", []):
-        for whl in package.get("wheels", []):
-            wheel_files[url_basename(whl["url"])] = 1
 
     # Configurations depend only on a wheel's trailing tag triple
     # ({python}-{abi}-{platform}.whl); a large lock has thousands of wheel
     # files but only a few dozen distinct triples, so parse and expand one
     # representative wheel per triple.
     tag_triples = {}
-    for wheel_name in wheel_files.keys():
+    for wheel_name in wheel_files:
         parts = wheel_name.rsplit("-", 3)
-        tag_triples["-".join(parts[1:]) if len(parts) == 4 else wheel_name] = wheel_name
+        tags = wheel_name[len(parts[0]) + 1:] if len(parts) == 4 else wheel_name
+        tag_triples[tags] = wheel_name
 
     # Platform definitions from groups of configs
     configurations = {}
@@ -235,65 +186,46 @@ def collect_configurations(lock):
 
     return configurations
 
-def collect_bdists(lock_data):
-    """Collects all pre-built wheels (bdists) from a lockfile.
+def collect_bdists(lock_data, bdist_specs, wheel_files):
+    """Record wheel specs by label and filenames for platform configurations.
 
-    Args:
-        lock_data: The parsed content of the `uv.lock` file.
-
-    Returns:
-        A tuple containing:
-        - A dictionary mapping repository names for the wheels to their bdist
-          specifications.
-        - A dictionary mapping the URL of each wheel to its repository label.
+    Returns this lock's URL index mapping each wheel URL to its filename and
+    download label. Later specs for the same label replace the download metadata.
     """
-    bdist_specs = {}
     bdist_table = {}
     for package in lock_data.get("package", []):
         for bdist in package.get("wheels", []):
-            bdist_repo_name = "whl__{}__{}".format(package["name"], _dist_identifier(bdist))
-            bdist_specs[bdist_repo_name] = bdist
-            bdist_table[bdist["url"]] = "@{}//:whl".format(bdist_repo_name)
+            name = "whl__%s__%s" % (package["name"], _dist_identifier(bdist))
+            label = "@%s//:whl" % name
+            url = bdist["url"]
+            filename = url_basename(url)
+            bdist_specs[label] = (name, filename, bdist)
+            bdist_table[url] = (filename, label)
+            wheel_files[filename] = True
+    return bdist_table
 
-    return bdist_specs, bdist_table
-
-def collect_sdists(
-        lock_id,
-        lock_data):
-    """Collects all source distributions (sdists) from a lockfile.
-
-    Args:
-        lock_id: A unique identifier for the lockfile.
-        lock_data: The parsed content of the `uv.lock` file.
-
-    Returns:
-        A tuple containing:
-        - A dictionary mapping repository names for the sdists to their
-          specifications.
-        - A dictionary mapping sdist build keys to their repository labels.
-    """
-    sdist_specs = {}
-    sdist_table = {}
+def collect_sdists(lock_id, lock_data, sdist_specs, sdist_table):
+    """Record source download specs by repo name and their labels by build key."""
     for package in lock_data.get("package", []):
-        k = "sdist_build__{}__{}__{}".format(lock_id, package["name"], normalize_version(package["version"]))
         if "sdist" in package:
             sdist = package["sdist"]
 
             sdist_repo_name = "sdist__{}__{}".format(package["name"], _dist_identifier(sdist))
             sdist_specs[sdist_repo_name] = {"file": sdist}
-            sdist_table[k] = "@{}//file".format(sdist_repo_name)
 
         elif "git" in package["source"]:
             git_url = package["source"]["git"]
             git_cfg = parse_git_url(git_url)
             sdist_repo_name = "sdist_git__{}__{}".format(package["name"], fnv1a_64(git_url))
 
-            sdist_table[k] = "@{}//file".format(sdist_repo_name)
             sdist_cfg = try_git_to_http_archive(git_cfg)
             if sdist_cfg:
                 sdist_specs[sdist_repo_name] = {"file": sdist_cfg}
 
             else:
                 sdist_specs[sdist_repo_name] = {"git": git_cfg}
+        else:
+            continue
 
-    return sdist_specs, sdist_table
+        k = "sdist_build__{}__{}__{}".format(lock_id, package["name"], normalize_version(package["version"]))
+        sdist_table[k] = "@{}//file".format(sdist_repo_name)

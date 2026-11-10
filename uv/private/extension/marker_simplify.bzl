@@ -1,4 +1,4 @@
-"""Partial evaluation of PEP 508 `extra` markers during graph construction.
+"""Simplify PEP 508 markers during graph construction.
 
 uv writes every dependency of an extra with a redundant `extra == '<name>'`
 marker. An edge out of an extra pseudo-package is only ever traversed once that
@@ -30,3 +30,27 @@ def simplify_extra_marker(marker, extra):
     if res == True:
         return ""
     return res
+
+def clause_marker(clause):
+    """Render a canonical conjunction clause as a marker expression."""
+    if not clause:
+        return ""
+    if len(clause) == 1:
+        return clause[0]
+    return " and ".join(["({})".format(marker) for marker in clause])
+
+def add_minimal_clause(clauses, candidate):
+    """Add candidate unless an existing, less restrictive clause subsumes it."""
+    if clauses:
+        if candidate in clauses or () in clauses:
+            return False
+        if not candidate:
+            clauses.clear()
+        else:
+            for existing in clauses:
+                if all([marker in candidate for marker in existing]):
+                    return False
+            for existing in [existing for existing in clauses if all([marker in existing for marker in candidate])]:
+                clauses.pop(existing)
+    clauses[candidate] = 1
+    return True

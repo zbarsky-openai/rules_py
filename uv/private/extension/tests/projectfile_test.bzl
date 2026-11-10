@@ -1,14 +1,16 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load("//uv/private/extension:projectfile.bzl", "collect_activated_extras", "extract_requirement_marker_pairs")
 
+def _locked_versions(name, versions):
+    return {name: {version: ("proj", name, version, "__base__") for version in versions}}
+
 def _extract_requirement_marker_pairs_multi_version_no_specifier_test_impl(ctx):
     env = unittest.begin(ctx)
     result = extract_requirement_marker_pairs(
         "//:pyproject.toml",
-        "proj",
         "build",
         {},
-        {"build": {"1.3.0": 1, "1.4.0": 1}},
+        _locked_versions("build", ["1.3.0", "1.4.0"]),
     )
     asserts.equals(env, 1, len(result))
     dep, marker = result[0]
@@ -24,10 +26,9 @@ def _extract_requirement_marker_pairs_multi_version_with_specifier_test_impl(ctx
     env = unittest.begin(ctx)
     result = extract_requirement_marker_pairs(
         "//:pyproject.toml",
-        "proj",
         "build>=1.3.0,<1.4.0",
         {},
-        {"build": {"1.2.0": 1, "1.3.0": 1, "1.4.0": 1}},
+        _locked_versions("build", ["1.2.0", "1.3.0", "1.4.0"]),
     )
     asserts.equals(env, 1, len(result))
     dep, marker = result[0]
@@ -44,10 +45,9 @@ def _extract_requirement_marker_pairs_single_version_via_map_test_impl(ctx):
     version_map = {"build": ("proj", "build", "1.2.0", "__base__")}
     result = extract_requirement_marker_pairs(
         "//:pyproject.toml",
-        "proj",
         "build",
         version_map,
-        {"build": {"1.2.0": 1, "1.3.0": 1}},
+        _locked_versions("build", ["1.2.0", "1.3.0"]),
     )
     asserts.equals(env, 1, len(result))
     dep, marker = result[0]
@@ -63,10 +63,9 @@ def _extract_requirement_marker_pairs_with_extras_test_impl(ctx):
     env = unittest.begin(ctx)
     result = extract_requirement_marker_pairs(
         "//:pyproject.toml",
-        "proj",
         'build[extra1,extra2] >= 1.0; python_version >= "3.10"',
         {},
-        {"build": {"1.0.0": 1, "1.1.0": 1}},
+        _locked_versions("build", ["1.0.0", "1.1.0"]),
     )
     asserts.equals(env, 3, len(result))
     asserts.equals(env, (("proj", "build", "1.1.0", "__base__"), 'python_version >= "3.10"'), result[0])
@@ -84,10 +83,9 @@ def _extract_requirement_marker_pairs_preferred_overrides_version_map_test_impl(
     preferred = {"build": ("proj", "build", "1.3.0", "__base__")}
     result = extract_requirement_marker_pairs(
         "//:pyproject.toml",
-        "proj",
         "build",
         version_map,
-        {"build": {"1.2.0": 1, "1.3.0": 1}},
+        _locked_versions("build", ["1.2.0", "1.3.0"]),
         preferred,
     )
     asserts.equals(env, 1, len(result))
@@ -104,10 +102,9 @@ def _extract_requirement_marker_pairs_preferred_overrides_multi_version_test_imp
     preferred = {"build": ("proj", "build", "1.3.0", "__base__")}
     result = extract_requirement_marker_pairs(
         "//:pyproject.toml",
-        "proj",
         "build",
         {},
-        {"build": {"1.3.0": 1, "1.4.0": 1}},
+        _locked_versions("build", ["1.3.0", "1.4.0"]),
         preferred,
     )
     asserts.equals(env, 1, len(result))
@@ -124,10 +121,9 @@ def _extract_requirement_marker_pairs_preferred_satisfying_wildcard_test_impl(ct
     preferred = {"foo": ("proj", "foo", "1.2", "__base__")}
     result = extract_requirement_marker_pairs(
         "//:pyproject.toml",
-        "proj",
         "foo==1.*",
         {},
-        {"foo": {"1.2": 1, "1.9": 1}},
+        _locked_versions("foo", ["1.2", "1.9"]),
         preferred,
     )
     asserts.equals(env, [(("proj", "foo", "1.2", "__base__"), "")], result)
@@ -142,10 +138,9 @@ def _extract_requirement_marker_pairs_unsatisfied_preferred_matches_lock_test_im
     preferred = {"foo": ("proj", "foo", "2.0", "__base__")}
     result = extract_requirement_marker_pairs(
         "//:pyproject.toml",
-        "proj",
         'foo<2; sys_platform != "darwin"',
         {"foo": ("proj", "foo", "2.0", "__base__")},
-        {"foo": {"1.5": 1, "2.0": 1}},
+        _locked_versions("foo", ["1.5", "2.0"]),
         preferred,
     )
     asserts.equals(env, [(("proj", "foo", "1.5", "__base__"), 'sys_platform != "darwin"')], result)
@@ -159,10 +154,9 @@ def _extract_requirement_marker_pairs_unsatisfied_single_version_falls_back_test
     env = unittest.begin(ctx)
     result = extract_requirement_marker_pairs(
         "//:pyproject.toml",
-        "proj",
         "foo>=2",
         {"foo": ("proj", "foo", "1.9", "__base__")},
-        {"foo": {"1.9": 1}},
+        _locked_versions("foo", ["1.9"]),
     )
     asserts.equals(env, [(("proj", "foo", "1.9", "__base__"), "")], result)
     return unittest.end(env)
@@ -200,20 +194,24 @@ def _collect_activated_extras_transitive_remap_test_impl(ctx):
             },
         ],
     }
+    build_143 = ("lock", "build", "1.4.3", "__base__")
+    build_130 = ("lock", "build", "1.3.0", "__base__")
+    base_24 = ("lock", "packaging", "24.0", "__base__")
+    base_21 = ("lock", "packaging", "21.3", "__base__")
     graph = {
-        ("lock", "build", "1.4.3", "__base__"): {
-            ("lock", "packaging", "24.0", "__base__"): {"": 1},
+        build_143: {
+            base_24: {"": 1},
         },
-        ("lock", "build", "1.3.0", "__base__"): {
-            ("lock", "packaging", "21.3", "__base__"): {"": 1},
+        build_130: {
+            base_21: {"": 1},
         },
-        ("lock", "packaging", "24.0", "__base__"): {},
-        ("lock", "packaging", "21.3", "__base__"): {},
+        base_24: {},
+        base_21: {},
     }
     default_versions = {}
     package_versions = {
-        "build": {"1.3.0": 1, "1.4.3": 1},
-        "packaging": {"21.3": 1, "24.0": 1},
+        "build": {"1.3.0": build_130, "1.4.3": build_143},
+        "packaging": {"21.3": base_21, "24.0": base_24},
     }
 
     _cfg_names, activated_extras = collect_activated_extras(
@@ -225,11 +223,6 @@ def _collect_activated_extras_transitive_remap_test_impl(ctx):
         graph,
         package_versions,
     )
-
-    build_143 = ("lock", "build", "1.4.3", "__base__")
-    build_130 = ("lock", "build", "1.3.0", "__base__")
-    base_24 = ("lock", "packaging", "24.0", "__base__")
-    base_21 = ("lock", "packaging", "21.3", "__base__")
 
     asserts.true(env, build_143 in activated_extras)
     asserts.true(env, "group_a" in activated_extras[build_143])
@@ -302,8 +295,8 @@ def _collect_activated_extras_platform_split_transitive_markers_test_impl(ctx):
         {},
         graph,
         {
-            "platform_parent": {"1.0": 1, "2.0": 1},
-            "transitive_dep": {"1.0": 1, "2.0": 1},
+            "platform_parent": {"1.0": parent_1, "2.0": parent_2},
+            "transitive_dep": {"1.0": transitive_1, "2.0": transitive_2},
         },
     )
 
@@ -341,8 +334,8 @@ def _collect_activated_extras_conditional_cycle_test_impl(ctx):
         {},
         graph,
         {
-            "package_a": {"1.0": 1},
-            "package_b": {"1.0": 1},
+            "package_a": {"1.0": package_a},
+            "package_b": {"1.0": package_b},
         },
     )
 
@@ -392,10 +385,10 @@ def _collect_activated_extras_clause_rendering_collision_test_impl(ctx):
         {},
         graph,
         {
-            "split_parent": {"1.0": 1},
-            "paren_parent": {"1.0": 1},
-            "plain_parent": {"1.0": 1},
-            "leaf": {"1.0": 1},
+            "split_parent": {"1.0": split_parent},
+            "paren_parent": {"1.0": paren_parent},
+            "plain_parent": {"1.0": plain_parent},
+            "leaf": {"1.0": leaf},
         },
     )
 

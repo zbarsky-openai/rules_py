@@ -76,22 +76,17 @@ py_library(
         testonly = "\n    testonly = True," if testonly else "",
     ))
 
-def _distribution(data, refs):
+def _distribution(data, refs, marker_fn):
     content = []
-    _marker = marker_interner({})
     if "cfgs" in data:
-        installs = {component: str(refs.get(label, label)) for component, label in data["installs"].items()}
-        _add_aliases(content, data["name"], data["cfgs"], installs, data["owners"], data["testonly"], _marker)
+        installs = {component: refs.get(label, label) for component, label in data["installs"].items()}
+        _add_aliases(content, data["name"], data["cfgs"], installs, data["owners"], data["testonly"], marker_fn)
     for scc_id, (members, deps, testonly) in data["components"].items():
-        _add_component(content, scc_id, _canonical_keys(members, refs), _canonical_keys(deps, refs), testonly, _marker)
+        _add_component(content, scc_id, _canonical_keys(members, refs), _canonical_keys(deps, refs), testonly, marker_fn)
     return content
 
 def _dep_groups(groups):
-    venv_content = []
-
-    for cfg_name in groups:
-        venv_content.append(
-            """
+    return ["""
 config_setting(
     name = "{name}",
     flag_values = {{
@@ -99,9 +94,7 @@ config_setting(
     }},
     visibility = ["//visibility:public"],
 )
-""".format(name = cfg_name),
-        )
-    return venv_content
+""".format(name = cfg_name) for cfg_name in groups]
 
 def _surface(packages, testonly_packages, installs):
     root_content = []
@@ -154,28 +147,22 @@ exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 def _partition_build_deps(build, distributions, owners):
     # Source frontends normally use the selected requirement and its dependency
     # components. The project-level aggregate files remain available separately.
-    packages = build["packages"]
-    prefix = "//private/build_deps/sccs:"
-
-    def build_label(label):
-        if not label.startswith(prefix):
-            return label
-        component = label[len(prefix):]
-        if component not in build["scc_graph"]:
-            return label
-        return "//private/build_deps/packages/{}:_scc__{}".format(owners[component], component)
+    component_labels = {
+        "//private/build_deps/sccs:" + component: "//private/build_deps/packages/%s:_scc__%s" % (owners[component], component)
+        for component in build["scc_graph"]
+    }
 
     def part(name):
         distribution = distributions.setdefault(name, {"components": {}})
         return distribution.setdefault("build", {"packages": {}, "scc_graph": {}})
 
-    for name, candidates in packages.items():
+    for name, candidates in build["packages"].items():
         part(name)["packages"][name] = [
-            {"markers": c["markers"], "deps": [build_label(dep) for dep in c["deps"]]}
+            {"markers": c["markers"], "deps": [component_labels.get(dep, dep) for dep in c["deps"]]}
             for c in candidates
         ]
     for component, deps in build["scc_graph"].items():
-        part(owners[component])["scc_graph"]["_scc__" + component] = {build_label(label): markers for label, markers in deps.items()}
+        part(owners[component])["scc_graph"]["_scc__" + component] = {component_labels.get(label, label): markers for label, markers in deps.items()}
 
 def partition_project(dep_to_scc, scc_graph, scc_deps, testonly_packages, build_deps, build_component_owners):
     """Partition the project graph into the inputs for each generated repository."""
@@ -265,31 +252,42 @@ def _label_refs(labels):
     # Convert generated apparent labels when the extension declares the repository.
     # Legacy macros instantiate in the public project. A member's install label
     # must not introduce that install into the public project's repository map.
-    return {label: label for label in sorted(labels) if label.startswith("@") and not label.startswith("@@")}
+    apparent = [label for label in labels if label.startswith("@") and not label.startswith("@@")]
+    return {label: label for label in sorted(apparent)}
+
+def _canonical_refs(refs):
+    return {label: str(target) for label, target in refs.items()}
 
 def _canonical_keys(values, refs):
-    return {str(refs.get(k, k)): v for k, v in values.items()}
+    return {refs.get(k, k): v for k, v in values.items()}
 
-def _build_labels(graph):
-    labels = {label: True for deps in graph["scc_graph"].values() for label in deps}
-    labels.update({label: True for candidates in graph["packages"].values() for candidate in candidates for label in candidate["deps"]})
-    return labels
+def _add_build_labels(labels, graph):
+    for deps in graph["scc_graph"].values():
+        labels.update(deps)
+    for candidates in graph["packages"].values():
+        for candidate in candidates:
+            for label in candidate["deps"]:
+                labels[label] = True
 
 def _resolve_build_labels(graph, refs):
     for candidates in graph["packages"].values():
         for candidate in candidates:
-            candidate["deps"] = [str(refs.get(label, label)) for label in candidate["deps"]]
+            candidate["deps"] = [refs.get(label, label) for label in candidate["deps"]]
     graph["scc_graph"] = {key: _canonical_keys(deps, refs) for key, deps in graph["scc_graph"].items()}
+
+def _write_defs(ctx, declarations, loads = ""):
+    _module(ctx, "defs.bzl", loads, declarations)
+    ctx.file("BUILD.bazel", 'exports_files(["defs.bzl"])')
 
 def _member_impl(ctx):
     data = json.decode(ctx.attr.data)
-    refs = ctx.attr.refs
-    _module(ctx, "defs.bzl", PY_LIBRARY_LOAD, _distribution(data, refs))
-    ctx.file("BUILD.bazel", 'exports_files(["defs.bzl"])')
+    refs = _canonical_refs(ctx.attr.refs)
+    marker_fn = marker_interner({})
+    _write_defs(ctx, _distribution(data, refs, marker_fn), PY_LIBRARY_LOAD)
     if "build" in data:
         graph = data["build"]
         _resolve_build_labels(graph, refs)
-        decls = render_build_deps(graph["packages"], graph["scc_graph"], marker_interner({}))
+        decls = render_build_deps(graph["packages"], graph["scc_graph"], marker_fn)
         _module(ctx, "build.bzl", BUILD_DEPS_LOAD, decls.components + decls.requirements)
     return ctx.repo_metadata(reproducible = True)
 
@@ -297,19 +295,14 @@ _member = repository_rule(implementation = _member_impl, attrs = {"data": attr.s
 
 def _marker_repo_impl(ctx):
     exprs = ctx.attr.exprs
-    _module(ctx, "defs.bzl", MARKERS_LOAD if exprs else "", [
-        marker_declaration(marker_name(expr), expr)
-        for expr in exprs
-    ])
-    ctx.file("BUILD.bazel", 'exports_files(["defs.bzl"])')
+    _write_defs(ctx, [marker_declaration(marker_name(expr), expr) for expr in exprs], MARKERS_LOAD if exprs else "")
     return ctx.repo_metadata(reproducible = True)
 
 _marker_repo = repository_rule(implementation = _marker_repo_impl, attrs = {"exprs": attr.string_list()})
 
 def _surface_impl(ctx):
     testonly_packages = {name: True for name in ctx.attr.testonly_packages}
-    _module(ctx, "defs.bzl", "", _surface(ctx.attr.packages, testonly_packages, [str(label) for label in ctx.attr.installs]))
-    ctx.file("BUILD.bazel", 'exports_files(["defs.bzl"])')
+    _write_defs(ctx, _surface(ctx.attr.packages, testonly_packages, [str(label) for label in ctx.attr.installs]))
     return ctx.repo_metadata(reproducible = True)
 
 _surface_repo = repository_rule(
@@ -322,19 +315,16 @@ _surface_repo = repository_rule(
 )
 
 def _groups_impl(ctx):
-    _module(ctx, "defs.bzl", "", _dep_groups(ctx.attr.groups))
-    ctx.file("BUILD.bazel", 'exports_files(["defs.bzl"])')
+    _write_defs(ctx, _dep_groups(ctx.attr.groups))
     return ctx.repo_metadata(reproducible = True)
 
 _groups_repo = repository_rule(implementation = _groups_impl, attrs = {"groups": attr.string_list()})
 
 def _build_graph_impl(ctx):
     graph = json.decode(ctx.attr.graph)
-    available = {
-        name: "@@{0}//private/build_deps/packages/{1}:{1}".format(ctx.attr.project.repo_name, name)
-        for name in graph["packages"]
-    }
-    _resolve_build_labels(graph, ctx.attr.refs)
+    prefix = "@@" + ctx.attr.project.repo_name + "//private/build_deps/packages/"
+    available = {name: prefix + name + ":" + name for name in graph["packages"]}
+    _resolve_build_labels(graph, _canonical_refs(ctx.attr.refs))
     ctx.file("build_deps.json", json.encode(graph))
     ctx.file("available_deps.json", json.encode(available))
     write_build_dep_records(ctx, available, graph)
@@ -412,7 +402,7 @@ def declare_project(name, build_deps, dep_to_scc, scc_deps, scc_graph, build_com
             labels.update(deps)
         if "build" in data:
             build_members.append(member)
-            labels.update(_build_labels(data["build"]))
+            _add_build_labels(labels, data["build"])
         repo = name + "__distribution_" + member
         members[member] = "@" + repo + "//:BUILD.bazel"
         _member(
@@ -421,19 +411,21 @@ def declare_project(name, build_deps, dep_to_scc, scc_deps, scc_graph, build_com
             refs = _label_refs(labels),
         )
 
-    buckets = {}
+    buckets = [[] for _ in range(MARKER_BUCKET_COUNT)]
     for expr in parts.exprs:
-        buckets.setdefault(marker_bucket(expr), []).append(expr)
-    for i in range(MARKER_BUCKET_COUNT):
-        _marker_repo(name = backing("marker_{}".format(i)), exprs = buckets.get(i, []))
+        buckets[marker_bucket(expr)].append(expr)
+    for i, exprs in enumerate(buckets):
+        _marker_repo(name = backing("marker_%s" % i), exprs = exprs)
     _surface_repo(name = backing("surface"), packages = parts.names, testonly_packages = sorted(testonly_packages), installs = parts.index_installs)
     _groups_repo(name = backing("groups"), groups = parts.groups)
     if build_deps != None:
+        labels = {}
+        _add_build_labels(labels, build_deps)
         _build_graph(
             name = backing("build_graph"),
             project = "@" + name + "//:BUILD.bazel",
             graph = json.encode(build_deps),
-            refs = _label_refs(_build_labels(build_deps)),
+            refs = _label_refs(labels),
         )
     _facade(
         name = name,

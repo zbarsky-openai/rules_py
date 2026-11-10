@@ -52,7 +52,6 @@ resolved dependencies available in the `@uv` repository.
 """
 
 load("@bazel_lib//lib:resource_sets.bzl", "resource_set_values")
-load("@bazel_skylib//lib:sets.bzl", "sets")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 load("//py/private/interpreter:resolve.bzl", "resolve_host_interpreter_label")
 load("//uv/private:normalize_name.bzl", "normalize_name")
@@ -68,9 +67,9 @@ load("//uv/private/uv_project:select_gen.bzl", "project_package_label")
 load("//uv/private/whl_install:dist_repository.bzl", "whl_dist")
 load("//uv/private/whl_install:metadata.bzl", "parse_console_script")
 load("//uv/private/whl_install:repository.bzl", "whl_install")
-load(":graph_utils.bzl", "activate_extras", "collect_build_deps", "collect_sccs", "replace_dependencies")
-load(":lockfile.bzl", "build_marker_graph", "collect_bdists", "collect_configurations", "collect_sdists", "normalize_deps", "url_basename")
-load(":projectfile.bzl", "collate_versions_by_name", "collect_activated_extras", "extract_requirement_marker_pairs")
+load(":graph_utils.bzl", "activate_extras", "collect_build_deps", "collect_sccs", "group_activations", "replace_dependencies")
+load(":lockfile.bzl", "collect_bdists", "collect_configurations", "collect_sdists", "normalize_lock", "url_basename")
+load(":projectfile.bzl", "collect_activated_extras", "extract_requirement_marker_pairs")
 
 # attr.string_dict cannot distinguish omission from an explicitly empty map.
 # The empty script name is invalid, so this sentinel cannot collide with a
@@ -83,15 +82,10 @@ def merge_exclude_globs(
         inherit_default_exclude_glob,
         default_applies = True):
     """Merge project and package exclusions without modifying either."""
-    patterns = []
-    if inherit_default_exclude_glob and default_applies:
-        for pattern in default_exclude_glob:
-            if pattern not in patterns:
-                patterns.append(pattern)
+    patterns = {pattern: True for pattern in default_exclude_glob} if inherit_default_exclude_glob and default_applies else {}
     for pattern in package_exclude_glob:
-        if pattern not in patterns:
-            patterns.append(pattern)
-    return patterns
+        patterns[pattern] = True
+    return patterns.keys()
 
 def _dist_sha256(dist):
     """The distribution's sha256 for http_file, or None for other hash algorithms."""
@@ -109,13 +103,9 @@ def shared_install_key(install_cfg):
     """
     if install_cfg.sbuild or install_cfg.post_install_patches or install_cfg.extra_deps or install_cfg.extra_data:
         return None
-    return json.encode([
-        # Wheel selection keeps the first candidate on a specificity tie, so
-        # ordering is significant and the pairs stay as an ordered list.
-        install_cfg.whls.items(),
-        install_cfg.exclude_glob,
-        install_cfg.testonly,
-    ])
+
+    # Wheel selection keeps the first candidate on a specificity tie.
+    return (tuple(install_cfg.whls.items()), tuple(install_cfg.exclude_glob), install_cfg.testonly)
 
 def dedupe_shared_installs(install_cfgs):
     """Drop duplicate shareable installs, returning `{dropped_id: canonical_id}`.
@@ -126,14 +116,12 @@ def dedupe_shared_installs(install_cfgs):
     """
     seen = {}
     id_remap = {}
-    for install_id in install_cfgs.keys():
-        key = shared_install_key(install_cfgs[install_id])
+    for install_id, cfg in install_cfgs.items():
+        key = shared_install_key(cfg)
         if key == None:
             continue
-        canonical = seen.get(key)
-        if canonical == None:
-            seen[key] = install_id
-        else:
+        canonical = seen.setdefault(key, install_id)
+        if canonical != install_id:
             id_remap[install_id] = canonical
     for dropped in id_remap:
         install_cfgs.pop(dropped)
@@ -199,29 +187,7 @@ def _merge_scc_dep_markers(marked_deps):
         merged.setdefault(dep if type(dep) == "string" else dep[1], {}).update(markers)
     return merged
 
-def _parse_hubs(module_ctx):
-    """Collect the set of hub names declared across all modules.
-
-    The result is used only to validate that each `uv.project()` refers to a
-    declared hub. Uniqueness across repositories is deliberately NOT enforced:
-    the conventional `@pypi` hub may be referenced by many modules, since build
-    configuration is disambiguated on the venv, not the hub.
-
-    Args:
-        module_ctx: The Bazel module context.
-
-    Returns:
-        A dict whose keys are declared hub names (values are unused).
-    """
-    hub_specs = {}
-
-    for mod in module_ctx.modules:
-        for hub in mod.tags.declare_hub:
-            hub_specs[hub.hub_name] = True
-
-    return hub_specs
-
-def _parse_projects(module_ctx, hub_specs):
+def _parse_projects(module_ctx, declared_hubs):
     """Resolve every `uv.project()` declaration into repository-rule inputs.
 
     For each project the `pyproject.toml` and `uv.lock` are decoded, the
@@ -230,8 +196,7 @@ def _parse_projects(module_ctx, hub_specs):
 
     Args:
         module_ctx: The Bazel module context.
-        hub_specs: Hub names known to be declared, as returned by `_parse_hubs`;
-            used to reject projects that reference an undeclared hub.
+        declared_hubs: Hub names declared across all modules.
 
     Returns:
         A struct of the inputs consumed by `_uv_impl`, with fields:
@@ -244,19 +209,18 @@ def _parse_projects(module_ctx, hub_specs):
           - sbuild_cfgs: `{sbuild_id -> sdist_build struct}` for packages that
             may build a wheel from source.
           - whl_cfgs: platform configuration matrix for `configurations_hub`.
-          - sdist_cfgs / bdist_cfgs: `{name -> fetch spec}` for `http_file` /
-            `git_archive` downloads.
+          - sdist_cfgs: source download specs keyed by repository name.
+          - bdist_cfgs: wheel download specs keyed by wheel label.
     """
 
     hub_cfgs = {}
     project_cfgs = {}
-    whl_configurations = {}
+    wheel_files = {}
 
     sdist_specs = {}
     sdist_table = {}
 
     bdist_specs = {}
-    bdist_table = {}
 
     sbuild_specs = {}
 
@@ -307,7 +271,7 @@ def _parse_projects(module_ctx, hub_specs):
             if not has_target and not has_modifications:
                 fail("uv.override_package() for '{}': must specify either `target` for full replacement or at least one modification attribute (build_tool, testonly, console_scripts, pre_build_patches, post_install_patches, exclude_glob, replacement_deps, extra_deps, extra_data, toolchains, env, monitor_memory, resource_set).".format(override.name))
 
-        unscoped_matches = {i: 0 for i, override in enumerate(mod.tags.override_package) if override.lock == None}
+        unscoped_matches = {}
 
         for project in mod.tags.project:
             default_exclude_packages = {
@@ -325,7 +289,7 @@ def _parse_projects(module_ctx, hub_specs):
 
             project_name = project.name or project_data["project"]["name"]
 
-            if project.hub_name not in hub_specs:
+            if project.hub_name not in declared_hubs:
                 fail("Project {} in {} refers to hub {} which is not configured for that module. Please declare it.".format(project_name, mod.name, project.hub_name))
 
             no_binary_packages = {
@@ -333,15 +297,13 @@ def _parse_projects(module_ctx, hub_specs):
                 for p in project_data.get("tool", {}).get("uv", {}).get("no-binary-package", [])
             }
 
-            default_versions, package_versions, lock_data = normalize_deps(project_id, lock_data)
+            default_versions, package_versions, marker_graph = normalize_lock(project_id, lock_data)
 
             def _resolve(package):
                 name = normalize_name(package["name"])
                 if "version" in package:
                     return (project_id, name, package["version"], "__base__")
-                elif name in default_versions:
-                    return default_versions[name]
-                return None
+                return default_versions.get(name)
 
             lock_build_dep_anns = {}
             lock_native_anns = {}
@@ -375,9 +337,7 @@ def _parse_projects(module_ctx, hub_specs):
             testonly_packages = {}
             native_targets = {}
             for i, override in enumerate(mod.tags.override_package):
-                if project.lock in override.exclude_locks:
-                    continue
-                if override.lock != None and override.lock != project.lock:
+                if project.lock in override.exclude_locks or (override.lock != None and override.lock != project.lock):
                     continue
 
                 name = normalize_name(override.name)
@@ -407,9 +367,8 @@ def _parse_projects(module_ctx, hub_specs):
                     ))
 
                 if override.lock == None:
-                    unscoped_matches[i] += 1
+                    unscoped_matches[i] = True
 
-                console_scripts = None
                 if override.console_scripts != _CONSOLE_SCRIPTS_UNSET:
                     console_scripts = []
                     for raw_script_name, raw_entry_point in sorted(override.console_scripts.items()):
@@ -423,106 +382,98 @@ def _parse_projects(module_ctx, hub_specs):
                                 repr(raw_entry_point),
                             ))
                         console_scripts.append(console_script)
+                    package_console_scripts[override_key] = console_scripts
 
-                has_target = override.target != None
                 package_overrides[override_key] = override
-                package_console_scripts[override_key] = console_scripts
                 if override.testonly:
                     testonly_packages[name] = True
 
-                k = (project_id, normalize_name(override.name), v, "__base__")
+                install_key = available_versions[v]
                 if override.replacement_deps:
                     replacements = {normalize_name(dep): str(label) for dep, label in override.replacement_deps.items()}
                     if len(replacements) != len(override.replacement_deps):
                         fail("uv.override_package() for '{}=={}' in lock '{}': replacement_deps names must be distinct after normalization.".format(override.name, v, project.lock))
-                    replacement_deps[k] = replacements
-                if has_target:
+                    replacement_deps[install_key] = replacements
+                if override.target != None:
                     if module_ctx.getenv("RULES_PY_UV_VERBOSE", ""):
                         print("Overriding {}@{} in {} with {}".format(override.name, v, project_name, override.target))
-                    install_table[k] = str(override.target)
+                    install_table[install_key] = str(override.target)
                     if override.lock != None and len(available_versions) == 1:
-                        native_targets[k] = True
+                        native_targets[install_key] = True
 
             lock_build_deps = None
+            lock_build_dep_labels = None
 
-            marker_graph = build_marker_graph(project_id, lock_data)
-            for package, replacements in replacement_deps.items():
-                # Validate against base and extra edges before a configuration
-                # can make a valid dependency inactive.
-                available = {
-                    dep[1]: True
-                    for parent, deps in marker_graph.items()
-                    if parent[:3] == package[:3]
-                    for dep in deps
-                }
-                missing = sorted([name for name in replacements if name not in available])
-                if missing:
-                    fail("uv.override_package() for '{}=={}' in lock '{}': replacement_deps names are not direct dependencies: {}".format(
-                        package[1],
-                        package[2],
-                        project.lock,
-                        missing,
-                    ))
+            if replacement_deps:
+                # Validate base and extra edges before applying group activations.
+                missing = {package[1:3]: dict(replacements) for package, replacements in replacement_deps.items()}
+                for parent, deps in marker_graph.items():
+                    names = missing.get(parent[1:3])
+                    if names:
+                        for dep in deps:
+                            names.pop(dep[1], None)
+                for (name, version), names in missing.items():
+                    if names:
+                        fail("uv.override_package() for '{}=={}' in lock '{}': replacement_deps names are not direct dependencies: {}".format(
+                            name,
+                            version,
+                            project.lock,
+                            sorted(names),
+                        ))
 
-            bd, bt = collect_bdists(lock_data)
-            bdist_specs.update(bd)
-            bdist_table.update(bt)
-
-            sd, st = collect_sdists(project_stamp, lock_data)
-            sdist_specs.update(sd)
-            sdist_table.update(st)
-
-            whl_configurations.update(collect_configurations(lock_data))
+            bdist_table = collect_bdists(lock_data, bdist_specs, wheel_files)
+            collect_sdists(project_stamp, lock_data, sdist_specs, sdist_table)
 
             configuration_names, activated_extras = collect_activated_extras(project.lock, project_id, project_data, lock_data, default_versions, marker_graph, package_versions, native_targets)
-            version_activations = collate_versions_by_name(activated_extras)
 
             # SCC graph shapes:
             #   scc_graph:        {scc_id -> {member -> markers}}
             #   scc_deps:         {scc_id -> {dep -> markers}}
-            #   package_cfg_sccs: {package -> {cfg -> scc_id}}
+            #   cfg_package_sccs: {cfg -> {package -> scc_id}}
             scc_graph = {}
             scc_deps = {}
-            package_cfg_sccs = {}
+            cfg_package_sccs = {}
 
-            # Shared across configurations so SCCs with identical content share
-            # one id; content differing only in deps/markers stays distinct.
-            scc_id_state = {}
+            base, groups = group_activations(marker_graph, activated_extras, configuration_names)
+
+            # Only distinct graphs need to intern matching SCCs across configurations.
+            scc_id_state = {} if len(groups) > 1 else None
+            last_results = {}
             for cfg in configuration_names:
-                cfgd_marker_graph = activate_extras(marker_graph, activated_extras, cfg)
+                if cfg in groups:
+                    activations, equivalent_cfgs = groups[cfg]
+                    edges = activate_extras(base, marker_graph, activations)
+                    package_sccs, cfgd_scc_graph, cfgd_scc_deps = collect_sccs(replace_dependencies(edges, replacement_deps), scc_id_state)
+                    for equivalent in equivalent_cfgs:
+                        cfg_package_sccs[equivalent] = package_sccs
+                    if len(equivalent_cfgs) > 1:
+                        last_results[equivalent_cfgs[-1]] = (cfgd_scc_graph, cfgd_scc_deps)
+                elif cfg in last_results:
+                    cfgd_scc_graph, cfgd_scc_deps = last_results.pop(cfg)
+                else:
+                    continue
 
-                # Preserve locked activation and markers on replacement edges.
-                cfgd_marker_graph = replace_dependencies(cfgd_marker_graph, replacement_deps)
-                cfgd_dep_to_scc, cfgd_scc_graph, cfgd_scc_deps = collect_sccs(cfgd_marker_graph, scc_id_state)
-
-                # Aggregated across configurations; markers that vary per graph
-                # are intentionally flattened here.
+                # The first occurrence establishes order and the last supplies
+                # the final markers for IDs shared between configurations.
                 scc_graph.update(cfgd_scc_graph)
                 scc_deps.update(cfgd_scc_deps)
 
-                for package, scc in cfgd_dep_to_scc.items():
-                    package_cfg_sccs.setdefault(package, {})[cfg] = scc
-
+            # A lock may contain dev-only components that no public alias reaches.
+            reachable_sccs = {}
             marked_package_cfg_sccs = {}
-            for package, cfgs in version_activations.items():
-                for cfg, versions in cfgs.items():
-                    for version, markers in versions.items():
-                        marked_package_cfg_sccs.setdefault(package, {}).setdefault(cfg, {}).setdefault(package_cfg_sccs[version][cfg], {}).update(markers)
+            for version, configs in activated_extras.items():
+                package_cfgs = marked_package_cfg_sccs.setdefault(version[1], {})
+                for cfg, extras in configs.items():
+                    scc = cfg_package_sccs[cfg][version]
+                    reachable_sccs[scc] = True
+                    markers = package_cfgs.setdefault(cfg, {}).setdefault(scc, {})
+                    for extra_markers in extras.values():
+                        markers.update(extra_markers)
 
-            # The lock may contain inactive dev-only packages. Keep the SCCs
-            # reachable from emitted aliases so they cannot leak into Gazelle.
-            reachable_sccs = {
-                scc_id: True
-                for cfgs in marked_package_cfg_sccs.values()
-                for sccs in cfgs.values()
-                for scc_id in sccs
-            }
-            missing_sccs = [scc_id for scc_id in reachable_sccs if scc_id not in scc_graph]
-            if missing_sccs:
-                fail("Surface package aliases reference missing SCCs: {}".format(missing_sccs))
-
-            scc_graph = {scc_id: members for scc_id, members in scc_graph.items() if scc_id in reachable_sccs}
-            scc_deps = {scc_id: deps for scc_id, deps in scc_deps.items() if scc_id in reachable_sccs}
+            for scc_id in scc_graph.keys():
+                if scc_id not in reachable_sccs:
+                    scc_graph.pop(scc_id)
+                    scc_deps.pop(scc_id)
             for scc_id, deps in scc_deps.items():
                 for dep in deps:
                     if type(dep) != "string" and dep[1] not in marked_package_cfg_sccs:
@@ -545,46 +496,48 @@ def _parse_projects(module_ctx, hub_specs):
                     if not changed:
                         break
 
+            def build_dep_label(dep):
+                name = dep[1]
+                label = project_package_label(name) if name in marked_package_cfg_sccs else "//:" + name
+                return "@" + project_id + label
+
             project_has_sbuilds = False
+            default_exclusions = merge_exclude_globs(project.default_exclude_glob, (), True)
+            editable_project_name = normalize_name(project_name)
             for package in lock_data.get("package", []):
-                install_key = (project_id, package["name"], package["version"], "__base__")
-                k = "whl_install__{}__{}__{}".format(project_stamp, package["name"], normalize_version(package["version"]))
+                name = package["name"]
+                version = package["version"]
+                install_key = package_versions[name][version]
+                override_key = (name, version)
+                repo_suffix = "{}__{}__{}".format(project_stamp, name, normalize_version(version))
+                k = "whl_install__" + repo_suffix
                 install_target = "@{}//:install".format(k)
                 existing_target = install_table.get(install_key)
                 if existing_target != None and existing_target != install_target:
-                    # Already populated by a uv.override_package(target=...); skip.
+                    # A full override already supplies this package.
                     continue
-                elif "virtual" in package["source"]:
-                    override_key = (normalize_name(package["name"]), package["version"])
+
+                source = package["source"]
+                if "virtual" in source:
                     if override_key in package_overrides:
-                        fail("Virtual package {} in lockfile {} cannot use a modification-only `uv.override_package()` annotation because it is not installed.".format(package["name"], project.lock))
+                        fail("Virtual package {} in lockfile {} cannot use a modification-only `uv.override_package()` annotation because it is not installed.".format(name, project.lock))
                     continue
-                elif "editable" in package["source"]:
-                    if normalize_name(package["name"]) == normalize_name(project_name):
-                        override_key = (normalize_name(package["name"]), package["version"])
-                        if override_key in package_overrides:
-                            fail("Editable project package {} in lockfile {} cannot use a modification-only `uv.override_package()` annotation because the workspace supplies it.".format(package["name"], project.lock))
-                        continue
-                    else:
-                        fail("Editable package {} in lockfile {} doesn't have a mandatory `uv.override_package(target = ...)` annotation!".format(package["name"], project.lock))
+                if "editable" in source:
+                    if name != editable_project_name:
+                        fail("Editable package {} in lockfile {} doesn't have a mandatory `uv.override_package(target = ...)` annotation!".format(name, project.lock))
+                    if override_key in package_overrides:
+                        fail("Editable project package {} in lockfile {} cannot use a modification-only `uv.override_package()` annotation because the workspace supplies it.".format(name, project.lock))
+                    continue
 
                 install_table[install_key] = install_target
-                sbuild_id = "sdist_build__{}__{}__{}".format(project_stamp, package["name"], normalize_version(package["version"]))
+                sbuild_id = "sdist_build__" + repo_suffix
                 sdist = sdist_table.get(sbuild_id)
-                override_key = (normalize_name(package["name"]), package["version"])
                 pkg_override = package_overrides.get(override_key)
                 sbuild_console_scripts = package_console_scripts.get(override_key)
-
-                # WARNING: Loop invariant; this flag needs to be False by
-                # default and set if we do a build.
-                has_sbuild = False
-
-                is_no_binary = normalize_name(package["name"]) in no_binary_packages or bool(
-                    pkg_override and pkg_override.pre_build_patches
-                )
+                is_no_binary = name in no_binary_packages or bool(pkg_override and pkg_override.pre_build_patches)
 
                 if is_no_binary and not sdist:
-                    fail("Package {} requires a source build but has no sdist in the lockfile".format(package["name"]))
+                    fail("Package {} requires a source build but has no sdist in the lockfile".format(name))
                 if pkg_override and not sdist:
                     validate_build_attrs(
                         console_scripts = sbuild_console_scripts,
@@ -592,8 +545,8 @@ def _parse_projects(module_ctx, hub_specs):
                         env = pkg_override.env,
                         config_settings = pkg_override.config_settings,
                         error = "uv.override_package() for '{}=={}' in lock '{}': build-only attributes require a source distribution, but the lock record has only wheels: {{}}".format(
-                            package["name"],
-                            package["version"],
+                            name,
+                            version,
                             project.lock,
                         ),
                         monitor_memory = pkg_override.monitor_memory,
@@ -604,40 +557,28 @@ def _parse_projects(module_ctx, hub_specs):
                     )
                 if sdist:
                     project_has_sbuilds = True
-                    # HACK: Note that we resolve these LAZILY so that
-                    # bdist-only or fully overridden configurations don't
-                    # have to provide the build tools.
-
-                    # FIXME: We can read the [build-system] requires=
-                    # property if it exists for the sdist. Question is how
-                    # to defer choosing deps until the repo rule when we
-                    # could do pyproject.toml introspection.
-                    ann_key = (project_id, normalize_name(package["name"]), package["version"], "__base__")
                     build_tool = pkg_override.build_tool if pkg_override else None
-                    build_deps = [] if build_tool else lock_build_dep_anns.get(ann_key) or []
                     is_native = "auto"
-                    if ann_key in lock_native_anns:
-                        is_native = "true" if lock_native_anns[ann_key] else "false"
-                    if not build_tool and lock_build_deps == None:
-                        # For optional sdist fallbacks (sdist present but a
-                        # wheel will be picked at install time), tolerate a
-                        # lock that doesn't carry `default_build_dependencies`
-                        # — the sbuild target is never selected, so demanding
-                        # the build tools would force every project to pin
-                        # them. Fail eagerly when sbuild is guaranteed to be
-                        # selected: forced builds (`no-binary-package`) or
-                        # sdist-only packages (no wheels in the lock). Other
-                        # platform-mismatch cases can't be detected here
-                        # because we don't know the target build platform.
-                        sbuild_required = is_no_binary or not package.get("wheels", [])
-                        lock_build_deps = [
-                            it[0]
-                            for req in project.default_build_dependencies
-                            for it in extract_requirement_marker_pairs(project.lock, project_id, req, default_versions, package_versions, fail_if_missing = sbuild_required)
-                        ]
-
+                    if install_key in lock_native_anns:
+                        is_native = "true" if lock_native_anns[install_key] else "false"
+                    build_dep_labels = []
                     if not build_tool:
-                        build_deps = sets.to_list(sets.make(build_deps + lock_build_deps))
+                        if lock_build_deps == None:
+                            # Require build tools only for known mandatory source builds.
+                            # A target platform without a matching wheel can still need a fallback.
+                            sbuild_required = is_no_binary or not package.get("wheels", [])
+                            lock_build_deps = {
+                                dep: build_dep_label(dep)
+                                for req in project.default_build_dependencies
+                                for dep, _ in extract_requirement_marker_pairs(project.lock, req, default_versions, package_versions, fail_if_missing = sbuild_required)
+                            }
+                            lock_build_dep_labels = lock_build_deps.values()
+                        build_dep_labels = lock_build_dep_labels
+                        annotated_deps = lock_build_dep_anns.get(install_key)
+                        if annotated_deps:
+                            build_deps = {dep: build_dep_label(dep) for dep in annotated_deps}
+                            build_deps.update(lock_build_deps)
+                            build_dep_labels = build_deps.values()
 
                     pre_build_patches = []
                     pre_build_patch_strip = 1
@@ -660,18 +601,12 @@ def _parse_projects(module_ctx, hub_specs):
                         monitor_memory = pkg_override.monitor_memory
                         resource_set = pkg_override.resource_set
 
-                    build_dep_labels = []
-                    for dep in build_deps:
-                        dep_name = dep[1]
-                        label = project_package_label(dep_name) if dep_name in marked_package_cfg_sccs else "//:" + dep_name
-                        build_dep_labels.append("@" + project_id + label)
-
                     sbuild_specs[sbuild_id] = struct(
                         src = sdist,
                         deps = build_dep_labels,
                         build_tool = build_tool,
                         is_native = is_native,
-                        version = package["version"],
+                        version = version,
                         pre_build_patches = pre_build_patches,
                         pre_build_patch_strip = pre_build_patch_strip,
                         project_id = project_id,
@@ -683,16 +618,16 @@ def _parse_projects(module_ctx, hub_specs):
                         resource_set = resource_set,
                     )
 
-                    has_sbuild = True
-
                 post_install_patches = []
                 post_install_patch_strip = 1
-                exclude_glob = merge_exclude_globs(
-                    project.default_exclude_glob,
-                    pkg_override.exclude_glob if pkg_override else [],
-                    pkg_override.inherit_default_exclude_glob if pkg_override else True,
-                    not default_exclude_packages or override_key[0] in default_exclude_packages,
-                )
+                default_applies = not default_exclude_packages or name in default_exclude_packages
+                exclude_glob = default_exclusions if default_applies else []
+                if pkg_override:
+                    exclude_glob = merge_exclude_globs(
+                        exclude_glob,
+                        pkg_override.exclude_glob,
+                        pkg_override.inherit_default_exclude_glob,
+                    )
                 extra_deps = []
                 extra_data = []
                 if pkg_override and not pkg_override.target:
@@ -712,12 +647,12 @@ def _parse_projects(module_ctx, hub_specs):
                     if prev_cfg:
                         whls.update(prev_cfg.whls)
                     for whl in package.get("wheels", []):
-                        basename = url_basename(whl["url"])
-                        whls[basename] = bdist_table.get(whl["url"])
+                        basename, target = bdist_table[whl["url"]]
+                        whls[basename] = target
 
                 install_cfgs[k] = struct(
                     whls = whls,
-                    sbuild = "@{}//:whl".format(sbuild_id) if has_sbuild else None,
+                    sbuild = "@{}//:whl".format(sbuild_id) if sdist else None,
                     sbuild_console_scripts = sbuild_console_scripts,
                     post_install_patches = post_install_patches,
                     post_install_patch_strip = post_install_patch_strip,
@@ -738,11 +673,10 @@ def _parse_projects(module_ctx, hub_specs):
                     if "editable" in package.get("source", {}) or "virtual" in package.get("source", {}):
                         continue
                     pkg_name = package["name"]
-                    package_key = (project_id, pkg_name, package["version"], "__base__")
-                    build_package_keys.setdefault(pkg_name, {}).setdefault(package_key, {}).update({
-                        marker: 1
-                        for marker in package.get("resolution-markers") or [""]
-                    })
+                    package_key = package_versions[pkg_name][package["version"]]
+                    markers = build_package_keys.setdefault(pkg_name, {}).setdefault(package_key, {})
+                    for marker in package.get("resolution-markers") or ("",):
+                        markers[marker] = 1
                 build_dep_to_scc, build_scc_graph, build_scc_deps = collect_build_deps(replace_dependencies(marker_graph, replacement_deps))
                 build_packages = {
                     pkg_name: [
@@ -813,11 +747,11 @@ def _parse_projects(module_ctx, hub_specs):
                     fail("Conflict on configuration name {} in hub {}".format(cfg, project.hub_name))
                 hub_cfg.configurations[cfg] = project_index
 
-            for package, groups in version_activations.items():
+            for package, groups in marked_package_cfg_sccs.items():
                 hub_cfg.packages.setdefault(package, []).extend(groups.keys())
 
         for i, override in enumerate(mod.tags.override_package):
-            if override.lock == None and not unscoped_matches[i]:
+            if override.lock == None and i not in unscoped_matches:
                 if override.version:
                     fail("uv.override_package() for '{}=={}' matches no uv.project() locks in module '{}'.".format(override.name, override.version, mod.name))
                 fail("uv.override_package() for '{}' matches no uv.project() locks in module '{}'.".format(override.name, mod.name))
@@ -840,41 +774,33 @@ def _parse_projects(module_ctx, hub_specs):
             if build != None:
                 for candidates in build["packages"].values():
                     for candidate in candidates:
-                        candidate["deps"] = [target_remap.get(label, label) for label in candidate["deps"]]
+                        # The second entry is a local build component, not an install.
+                        deps = candidate["deps"]
+                        deps[0] = target_remap.get(deps[0], deps[0])
                 for component, members in build["scc_graph"].items():
-                    build["scc_graph"][component] = {target_remap.get(label, label): markers for label, markers in members.items()}
+                    for label in members:
+                        if label in target_remap:
+                            build["scc_graph"][component] = {
+                                target_remap.get(target, target): markers
+                                for target, markers in members.items()
+                            }
+                            break
 
     return struct(
         project_cfgs = project_cfgs,
         hub_cfgs = hub_cfgs,
         install_cfgs = install_cfgs,
         sbuild_cfgs = sbuild_specs,
-        whl_cfgs = whl_configurations,
+        whl_cfgs = collect_configurations(wheel_files),
         sdist_cfgs = sdist_specs,
         bdist_cfgs = bdist_specs,
     )
 
 def _uv_impl(module_ctx):
-    """The implementation function for the `uv` module extension.
-
-    This function is the main entry point for the module extension. It orchestrates
-    the entire dependency resolution process, which includes:
-    - Parsing `uv.declare_hub()` and `uv.project()` declarations.
-    - Generating repository rules for fetching and building all the declared
-      dependencies.
-    - Generating a `uv_project` repository rule for each pyproject.toml, which
-      contains the resolved dependency graph for that project according to the
-      matching lockfile.
-    - Generating a `uv_hub` repository rule for each hub, which contains the
-      aggregated dependency information for all the projects in that hub.
-
-    Args:
-        module_ctx: The Bazel module context.
-    """
-
-    hub_specs = _parse_hubs(module_ctx)
-
-    cfg = _parse_projects(module_ctx, hub_specs)
+    """Register the wheel, source-build, project, and hub repositories."""
+    # Modules can share a hub name. Projects use their venv to disambiguate.
+    declared_hubs = {hub.hub_name: True for mod in module_ctx.modules for hub in mod.tags.declare_hub}
+    cfg = _parse_projects(module_ctx, declared_hubs)
 
     configurations_hub(
         name = "aspect_rules_py_pip_configurations",
@@ -908,44 +834,31 @@ def _uv_impl(module_ctx):
     # each install can derive its own layout.
     bdist_exclusions = {}
     for install_cfg in cfg.install_cfgs.values():
-        for whl_label in install_cfg.whls.values():
-            if not whl_label:
-                continue
-            bdist_name = whl_label.split("//", 1)[0].lstrip("@")
-            if bdist_exclusions.setdefault(bdist_name, install_cfg.exclude_glob) != install_cfg.exclude_glob:
-                bdist_exclusions[bdist_name] = None
+        exclusions = install_cfg.exclude_glob
+        for label in install_cfg.whls.values():
+            if bdist_exclusions.setdefault(label, exclusions) != exclusions:
+                bdist_exclusions[label] = None
 
-    for bdist_name, bdist_cfg in cfg.bdist_cfgs.items():
+    for label, (name, filename, dist) in cfg.bdist_cfgs.items():
         # A per-wheel repo that downloads the wheel AND peeks its RECORD for the
         # install layout, so only the wheel a config selects is ever fetched.
-        exclusions = bdist_exclusions.get(bdist_name, [])
+        exclusions = bdist_exclusions.get(label, [])
         whl_dist(
-            name = bdist_name,
-            url = bdist_cfg["url"],
-            sha256 = _dist_sha256(bdist_cfg) or "",
-            downloaded_file_path = url_basename(bdist_cfg["url"]),
+            name = name,
+            url = dist["url"],
+            sha256 = _dist_sha256(dist) or "",
+            downloaded_file_path = filename,
             exclude_glob = exclusions or [],
             carry_record_paths = exclusions == None,
         )
 
     # Resolve the sdist configure tool. The default is our bundled
     # detect_native.py, run with a PBS interpreter for the host platform.
-    default_configure_interpreter = resolve_host_interpreter_label(module_ctx)
+    default_configure_interpreter = resolve_host_interpreter_label(module_ctx) if cfg.sbuild_cfgs else None
 
     for sbuild_id, sbuild_cfg in cfg.sbuild_cfgs.items():
         build_graph = "@{}__build_graph//:".format(sbuild_cfg.project_id)
-        sbuild_kwargs = {
-            "name": sbuild_id,
-            "available_deps_file": build_graph + "available_deps.json",
-            "build_deps_file": build_graph + "build_deps.json",
-            "package_install": sbuild_cfg.package_install,
-            "src": sbuild_cfg.src,
-            "deps": sbuild_cfg.deps,
-            "build_tool": sbuild_cfg.build_tool,
-            "is_native": sbuild_cfg.is_native,
-            "version": sbuild_cfg.version,
-        }
-
+        sbuild_kwargs = {}
         if default_configure_interpreter:
             sbuild_kwargs["configure_interpreter"] = default_configure_interpreter
             if not sbuild_cfg.build_tool:
@@ -964,16 +877,21 @@ def _uv_impl(module_ctx):
             sbuild_kwargs["monitor_memory"] = True
         if sbuild_cfg.resource_set != "default":
             sbuild_kwargs["resource_set"] = sbuild_cfg.resource_set
-        sdist_build(**sbuild_kwargs)
+        sdist_build(
+            name = sbuild_id,
+            available_deps_file = build_graph + "available_deps.json",
+            build_deps_file = build_graph + "build_deps.json",
+            package_install = sbuild_cfg.package_install,
+            src = sbuild_cfg.src,
+            deps = sbuild_cfg.deps,
+            build_tool = sbuild_cfg.build_tool,
+            is_native = sbuild_cfg.is_native,
+            version = sbuild_cfg.version,
+            **sbuild_kwargs
+        )
 
     for install_id, install_cfg in cfg.install_cfgs.items():
-        install_kwargs = {
-            "name": install_id,
-            "sbuild": install_cfg.sbuild,
-            "sbuild_console_scripts": install_cfg.sbuild_console_scripts or [],
-            "whls": install_cfg.whls,
-            "wheel_configurations": "@aspect_rules_py_pip_configurations//:BUILD.bazel",
-        }
+        install_kwargs = {}
         if install_cfg.sbuild_console_scripts != None:
             install_kwargs["sbuild_console_scripts_override"] = True
         if install_cfg.post_install_patches:
@@ -987,7 +905,14 @@ def _uv_impl(module_ctx):
             install_kwargs["extra_data"] = json.encode(install_cfg.extra_data)
         if install_cfg.testonly:
             install_kwargs["package_testonly"] = True
-        whl_install(**install_kwargs)
+        whl_install(
+            name = install_id,
+            sbuild = install_cfg.sbuild,
+            sbuild_console_scripts = install_cfg.sbuild_console_scripts or [],
+            whls = install_cfg.whls,
+            wheel_configurations = "@aspect_rules_py_pip_configurations//:BUILD.bazel",
+            **install_kwargs
+        )
 
     for project_id, project_cfg in cfg.project_cfgs.items():
         declare_project(name = project_id, **project_cfg)
