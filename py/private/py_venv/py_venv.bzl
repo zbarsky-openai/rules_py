@@ -28,13 +28,21 @@ layout details.
 load("@bazel_lib//lib:expand_make_vars.bzl", "expand_locations", "expand_variables")
 load("@bazel_lib//lib:paths.bzl", "BASH_RLOCATION_FUNCTION", "to_rlocation_path")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+load("//py/private:py_info.bzl", "PyInfo")
+load("//py/private:py_info_interop.bzl", "RulesPythonPyInfo")
 load("//py/private:py_library.bzl", _py_library = "py_library_utils")
 load("//py/private:py_semantics.bzl", _py_semantics = "semantics")
 load("//py/private:transitions.bzl", "python_transition")
 load("//py/private/toolchain:types.bzl", "EXEC_TOOLS_TOOLCHAIN", "PY_TOOLCHAIN")
 load(":py_venv_exec.bzl", _py_venv_exec = "py_venv_exec")
-load(":types.bzl", "VirtualenvInfo", "venv_root")
+load(":types.bzl", "FirstPartyPycInfo", "VirtualenvInfo", "venv_root")
 load(":venv.bzl", "assemble_venv")
+
+_FirstPartyPycEntry = provider(
+    doc = "One source's compiled bytecode and runfiles entry.",
+    fields = ["source", "symlink", "pyc_tag"],
+)
 
 def _interpreter_flags(ctx):
     args = _py_semantics.interpreter_flags + ctx.attr.interpreter_options
@@ -47,9 +55,38 @@ def _interpreter_flags(ctx):
 
     return args
 
-def _precompile_first_party(ctx, sources, target_runtime):
+def batch_first_party_sources(sources, batch_size):
+    """Group sources by stable path anchors, with a positive hard size limit."""
+    ordered = sorted(sources, key = lambda source: source.short_path)
+    if len(ordered) <= batch_size:
+        return [ordered] if ordered else []
+
+    # At the default limit of 64, accept 1-in-32 path anchors after 32 files.
+    # Unlike a source-count-dependent modulus, these anchors can resynchronize
+    # after insertions. Forced maximum-size cuts can still shift later batches.
+    minimum = (batch_size + 1) // 2
+    batches = []
+    start = 0
+    for index, source in enumerate(ordered):
+        size = index + 1 - start
+        if size == batch_size or (size >= minimum and hash(source.short_path) % minimum == 0):
+            batches.append(ordered[start:index + 1])
+            start = index + 1
+    if start < len(ordered):
+        batches.append(ordered[start:])
+    return batches
+
+def _pyc_path(source, pyc_tag):
+    directory, _, basename = source.short_path.rpartition("/")
+    return "{}__pycache__/{}.{}.pyc".format(
+        directory + "/" if directory else "",
+        basename[:-3],
+        pyc_tag,
+    )
+
+def _precompile_first_party(ctx, sources, target_runtime, precompiled = {}):
     if not ctx.attr._first_party_precompile[BuildSettingInfo].value:
-        return ctx.runfiles()
+        return ctx.runfiles(), []
 
     # One import path can appear more than once in a transitive PyInfo depset.
     # Distinct configured artifacts can share a runfiles path; only the venv
@@ -73,7 +110,7 @@ def _precompile_first_party(ctx, sources, target_runtime):
         first_party_sources[source_path] = source
     first_party_sources = [source for source in first_party_sources.values() if source != None]
     if not first_party_sources:
-        return ctx.runfiles()
+        return ctx.runfiles(), []
 
     batch_size = ctx.attr._first_party_precompile_batch_size[BuildSettingInfo].value
     if batch_size < 1:
@@ -84,61 +121,99 @@ def _precompile_first_party(ctx, sources, target_runtime):
         fail("first-party Python precompilation requires an execution Python toolchain")
     exec_runtime = exec_toolchain.exec_runtime
     if target_runtime.pyc_tag != exec_runtime.pyc_tag:
-        return ctx.runfiles()
+        return ctx.runfiles(), []
 
-    bucket_count = (len(first_party_sources) + batch_size - 1) // batch_size
-    buckets = {}
+    runfile_symlinks = {}
+    shared_symlinks = []
+    uncompiled_sources = []
     for source in first_party_sources:
-        bucket = hash(source.short_path) % bucket_count
-        buckets.setdefault(bucket, []).append(source)
+        symlink = precompiled.get(source.path)
+        if symlink != None:
+            shared_symlinks.append(symlink)
+        else:
+            uncompiled_sources.append(source)
+    first_party_sources = uncompiled_sources
 
     compiler_arguments = ctx.actions.args()
     compiler_arguments.add(ctx.file._first_party_precompile_compiler)
-    runfile_symlinks = {}
-    for bucket, bucket_sources in sorted(buckets.items()):
-        ordered_sources = sorted(bucket_sources, key = lambda source: source.short_path)
-        for offset in range(0, len(ordered_sources), batch_size):
-            batch_sources = ordered_sources[offset:offset + batch_size]
-            outputs = []
-            arguments = ctx.actions.args()
-            arguments.use_param_file("@%s", use_always = True)
-            arguments.set_param_file_format("multiline")
+    for batch_sources in batch_first_party_sources(first_party_sources, batch_size):
+        outputs = []
+        source_arguments = []
+        arguments = ctx.actions.args()
+        arguments.use_param_file("@%s", use_always = True)
+        arguments.set_param_file_format("multiline")
 
-            for source in batch_sources:
-                source_path = source.short_path
-                directory, _, basename = source_path.rpartition("/")
-                cache_path = "{}__pycache__/{}.{}.pyc".format(
-                    directory + "/" if directory else "",
-                    basename[:-3],
-                    target_runtime.pyc_tag,
-                )
-                output = ctx.actions.declare_file("{}.pyc/{}".format(ctx.label.name, cache_path))
-                outputs.append(output)
-                runfile_symlinks[cache_path] = output
-                arguments.add_all(["--source", source, output, source_path])
+        for source in batch_sources:
+            source_path = source.short_path
+            cache_path = _pyc_path(source, target_runtime.pyc_tag)
+            output = ctx.actions.declare_file("{}.pyc/{}".format(ctx.label.name, cache_path))
+            outputs.append(output)
+            runfile_symlinks[cache_path] = output
+            source_arguments.extend([source, output, source_path])
 
-            ctx.actions.run(
-                mnemonic = "PrecompileFirstPartyPython",
-                executable = exec_runtime.interpreter,
-                arguments = [compiler_arguments, arguments],
-                inputs = depset(
-                    direct = batch_sources + [
-                        ctx.file._first_party_precompile_compiler,
-                        exec_runtime.interpreter,
-                    ],
-                    transitive = [exec_runtime.files],
-                ),
-                outputs = outputs,
-                execution_requirements = {"supports-path-mapping": ""},
-                env = {
-                    "PYTHONHASHSEED": "0",
-                    "PYTHONNOUSERSITE": "1",
-                    "PYTHONSAFEPATH": "1",
-                },
-                toolchain = EXEC_TOOLS_TOOLCHAIN,
-            )
+        arguments.add_all(source_arguments)
+        ctx.actions.run(
+            mnemonic = "PrecompileFirstPartyPython",
+            executable = exec_runtime.interpreter,
+            arguments = [compiler_arguments, arguments],
+            inputs = depset(
+                direct = batch_sources + [
+                    ctx.file._first_party_precompile_compiler,
+                    exec_runtime.interpreter,
+                ],
+                transitive = [exec_runtime.files],
+            ),
+            outputs = outputs,
+            execution_requirements = {"supports-path-mapping": ""},
+            env = {
+                "PYTHONHASHSEED": "0",
+                "PYTHONNOUSERSITE": "1",
+                "PYTHONSAFEPATH": "1",
+            },
+            toolchain = EXEC_TOOLS_TOOLCHAIN,
+        )
 
-    return ctx.runfiles(symlinks = runfile_symlinks)
+    compiled = ctx.runfiles(symlinks = runfile_symlinks)
+    symlinks = {entry.path: entry for entry in compiled.symlinks.to_list()}
+    return compiled.merge(ctx.runfiles(symlinks = depset(shared_symlinks))), [
+        _FirstPartyPycEntry(source = source, symlink = symlinks[_pyc_path(source, target_runtime.pyc_tag)], pyc_tag = target_runtime.pyc_tag)
+        for source in first_party_sources
+    ]
+
+def _first_party_pyc_aspect_impl(target, ctx):
+    if FirstPartyPycInfo in target:
+        return []
+    if not ctx.attr._first_party_precompile[BuildSettingInfo].value:
+        return []
+
+    # Compile each library's direct sources once. The consuming venv still
+    # decides whether a source's import path is unambiguous before using it.
+    runtime = ctx.toolchains[PY_TOOLCHAIN].py3_runtime
+    sources = getattr(ctx.rule.files, "srcs", [])
+    _, entries = _precompile_first_party(ctx, depset(sources), runtime)
+    return [FirstPartyPycInfo(entries = depset(
+        entries,
+        transitive = [
+            dependency[FirstPartyPycInfo].entries
+            for dependency in getattr(ctx.rule.attr, "deps", [])
+            if FirstPartyPycInfo in dependency
+        ],
+    ))]
+
+_first_party_pyc_aspect = aspect(
+    implementation = _first_party_pyc_aspect_impl,
+    attr_aspects = ["deps"],
+    required_providers = [[PyInfo], [RulesPythonPyInfo]],
+    attrs = {
+        "_first_party_precompile": attr.label(default = "//py:precompile_first_party"),
+        "_first_party_precompile_batch_size": attr.label(default = "//py:first_party_precompile_batch_size"),
+        "_first_party_precompile_compiler": attr.label(
+            default = "//py/private/py_venv:first_party_precompile.py",
+            allow_single_file = True,
+        ),
+    },
+    toolchains = [PY_TOOLCHAIN, config_common.toolchain_type(EXEC_TOOLS_TOOLCHAIN, mandatory = False)],
+)
 
 def _assemble_venv_target(ctx, executable, console_scripts):
     """Assemble a venv and its provider-facing runtime metadata.
@@ -163,7 +238,20 @@ def _assemble_venv_target(ctx, executable, console_scripts):
     venv_stem = ctx.attr.name.replace("/", "_")
     wheels = _py_library.make_wheels_depset(ctx).to_list()
     srcs_depset = _py_library.make_srcs_depset(ctx, extra_depsets = virtual_resolution.srcs)
-    precompiled_runfiles = _precompile_first_party(ctx, srcs_depset, py_toolchain.toolchain)
+    precompiled_entries = depset()
+    direct_entries = []
+    precompiled_runfiles = ctx.runfiles()
+    if ctx.attr.precompile_first_party:
+        precompiled_entries = depset(transitive = [
+            dependency[FirstPartyPycInfo].entries
+            for dependency in ctx.attr.deps
+            if FirstPartyPycInfo in dependency
+        ])
+        precompiled = {}
+        for entry in precompiled_entries.to_list():
+            if entry.pyc_tag == py_toolchain.toolchain.pyc_tag:
+                precompiled.setdefault(entry.source.path, entry.symlink)
+        precompiled_runfiles, direct_entries = _precompile_first_party(ctx, srcs_depset, py_toolchain.toolchain, precompiled)
     indexed_runfiles = None
     if (
         ctx.attr.indexed_imports and
@@ -223,9 +311,9 @@ def _assemble_venv_target(ctx, executable, console_scripts):
         transitive_sources = srcs_depset,
         runtime_files = runtime_files,
         console_scripts = depset(assembled.console_scripts),
-    ), venv_only
+    ), venv_only, FirstPartyPycInfo(entries = depset(direct_entries, transitive = [precompiled_entries]))
 
-def _venv_providers(ctx, venv, venv_only, executable = None, include_sources = False):
+def _venv_providers(ctx, venv, venv_only, first_party_pyc, executable = None, include_sources = False):
     """Providers emitted by both the executable and lib variants."""
     runfiles = venv.runtime_runfiles.merge(ctx.runfiles(files = venv_only))
     if include_sources:
@@ -236,6 +324,7 @@ def _venv_providers(ctx, venv, venv_only, executable = None, include_sources = F
             executable = executable,
             runfiles = runfiles,
         ),
+        first_party_pyc,
         # Deliberately no PyInfo: a venv is a terminal artifact, not a source of imports.
         venv,
         # `bazel coverage` finds this by walking the consumer's `venv` attr.
@@ -251,7 +340,7 @@ def _py_venv_rule_impl(ctx):
     """A virtualenv target whose own executable activates the venv and
     exec's the interpreter — a `bazel run :name`-able venv."""
 
-    venv, venv_only = _assemble_venv_target(ctx, executable = True, console_scripts = True)
+    venv, venv_only, first_party_pyc = _assemble_venv_target(ctx, executable = True, console_scripts = True)
 
     ctx.actions.expand_template(
         template = ctx.file._run_tmpl,
@@ -280,7 +369,7 @@ def _py_venv_rule_impl(ctx):
     # overrides with its own absolute value when invoked directly.
     passed_env["VIRTUAL_ENV"] = venv_root(venv.bin_python)
 
-    return _venv_providers(ctx, venv, venv_only, executable = ctx.outputs.executable, include_sources = True) + [
+    return _venv_providers(ctx, venv, venv_only, first_party_pyc, executable = ctx.outputs.executable, include_sources = True) + [
         # Read by the sibling `expose_venv = True` py_binary/py_test;
         # the binary's own `env` wins on key conflicts (py_venv_exec.bzl).
         RunEnvironmentInfo(
@@ -381,6 +470,15 @@ does not reinsert a wheel.
 })
 
 _lib_attrs.update(**_py_library.attrs)
+_lib_attrs["precompile_first_party"] = attr.bool(
+    default = True,
+    doc = "Include first-party bytecode when globally enabled.",
+)
+_lib_attrs["deps"] = attr.label_list(
+    doc = "Targets that produce Python code, commonly `py_library` rules.",
+    providers = [[PyInfo], [RulesPythonPyInfo], [CcInfo]],
+    aspects = [_first_party_pyc_aspect],
+)
 
 # Attrs only the executable variant reads — launcher template, REPL
 # flags, env vars forwarded via RunEnvironmentInfo.
@@ -437,8 +535,8 @@ def _py_venv_lib_rule_impl(ctx):
     launcher and no RunEnvironmentInfo (Bazel rejects it on
     non-executable targets; py_venv_exec.bzl gates its read on
     `if RunEnvironmentInfo in venv`)."""
-    venv, venv_only = _assemble_venv_target(ctx, executable = False, console_scripts = ctx.attr.include_console_scripts)
-    return _venv_providers(ctx, venv, venv_only)
+    venv, venv_only, first_party_pyc = _assemble_venv_target(ctx, executable = False, console_scripts = ctx.attr.include_console_scripts)
+    return _venv_providers(ctx, venv, venv_only, first_party_pyc)
 
 # Internal-only non-executable variant. Uses `_lib_attrs` — the
 # launcher-only attrs (`debug`, `interpreter_options`, `_run_tmpl`,
@@ -491,6 +589,7 @@ _VENV_ONLY_ATTRS = [
     "package_collisions",
     "include_system_site_packages",
     "indexed_imports",
+    "precompile_first_party",
     "python_version",
     "dep_group",
 ]

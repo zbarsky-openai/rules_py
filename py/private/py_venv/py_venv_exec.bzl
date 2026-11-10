@@ -13,7 +13,7 @@ load("//py/private:py_info.bzl", "PyInfo")
 load("//py/private:py_info_interop.bzl", "RulesPythonPyInfo", "get_transitive_sources", "has_py_info")
 load("//py/private:py_semantics.bzl", _py_semantics = "semantics")
 load("//py/private:transitions.bzl", "reset_python_flags_transition", "venv_python_transition")
-load(":types.bzl", "VirtualenvInfo", "venv_root")
+load(":types.bzl", "FirstPartyPycInfo", "VirtualenvInfo", "venv_root")
 
 # Identifiers the launcher always sets to the analysing rule's contextual
 # values. Excluded from `inherited_environment` so that a stray
@@ -162,6 +162,8 @@ def _py_venv_exec_impl(ctx):
             virtual_dependencies = depset(),
             virtual_resolutions = depset(),
         ),
+        # A downstream Python target can reuse this venv's bytecode.
+        venv[FirstPartyPycInfo],
         instrumented_files_info,
         RunEnvironmentInfo(
             environment = passed_env,

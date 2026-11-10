@@ -29,3 +29,8 @@ binary's launcher exec's the venv's `bin_python`.
         "console_scripts": "depset[File] — `bin/<name>` console-script wrappers. Not part of `runtime_runfiles`; launchers add them via `include_console_scripts`.",
     },
 )
+
+FirstPartyPycInfo = provider(
+    doc = "Bytecode and runfiles entries shared by venvs in one Python configuration.",
+    fields = {"entries": "Depset of source, symlink, and pyc_tag structs."},
+)
