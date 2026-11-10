@@ -401,6 +401,7 @@ def assemble_venv(
             "{}/{}".format(site_packages_rel, group.root),
         )
         arguments = ctx.actions.args()
+        arguments.add("-B")  # Do not write import caches into interpreter inputs.
         arguments.add(site_merge_script_py)
         arguments.add_all([merged_dir], expand_directories = False, before_each = "--into")
         arguments.add("--collision-policy", package_collisions)
@@ -497,6 +498,7 @@ def assemble_venv(
         ], map_each = _wheel_projection_record)
 
         arguments = ctx.actions.args()
+        arguments.add("-B")  # Do not write import caches into interpreter inputs.
         arguments.add(ctx.file._import_index_generator)
         arguments.add(ctx.workspace_name)
         arguments.add(escape)

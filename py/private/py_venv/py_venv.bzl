@@ -136,6 +136,7 @@ def _precompile_first_party(ctx, sources, target_runtime, precompiled = {}, sepa
     first_party_sources = uncompiled_sources
 
     compiler_arguments = ctx.actions.args()
+    compiler_arguments.add("-B")  # Explicit py_compile outputs remain enabled.
     compiler_arguments.add(ctx.file._first_party_precompile_compiler)
     for batch_sources in batch_first_party_sources(first_party_sources, batch_size):
         outputs = []
